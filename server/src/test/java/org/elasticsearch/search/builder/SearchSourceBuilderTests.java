@@ -67,6 +67,20 @@ public class SearchSourceBuilderTests extends AbstractSearchTestCase {
         assertParseSearchSource(testSearchSourceBuilder, createParser(builder));
     }
 
+    public void testFromXContentInvalid() throws IOException {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, "{}}")) {
+            SearchSourceBuilder.fromXContent(parser);
+            assertWarnings("Found extra tokens after the _search request body, " +
+                "an error will be thrown in the next major version");
+        }
+
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, "{}{}")) {
+            SearchSourceBuilder.fromXContent(parser);
+            assertWarnings("Found extra tokens after the _search request body, " +
+                "an error will be thrown in the next major version");
+        }
+    }
+
     private static void assertParseSearchSource(SearchSourceBuilder testBuilder, XContentParser parser) throws IOException {
         if (randomBoolean()) {
             parser.nextToken(); // sometimes we move it on the START_OBJECT to
@@ -332,7 +346,7 @@ public class SearchSourceBuilderTests extends AbstractSearchTestCase {
         final int timeout = randomIntBetween(1, 1024);
         final String query = "{ \"query\": { \"match_all\": {}}, \"timeout\": \"" + timeout + "\"}";
         try (XContentParser parser = createParser(JsonXContent.jsonXContent, query)) {
-            final ElasticsearchParseException e = expectThrows(ElasticsearchParseException.class, () -> SearchSourceBuilder.fromXContent(
+            final IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> SearchSourceBuilder.fromXContent(
                     parser));
             assertThat(e, hasToString(containsString("unit is missing or unrecognized")));
         }

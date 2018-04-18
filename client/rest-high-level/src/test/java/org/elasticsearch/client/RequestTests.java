@@ -46,6 +46,7 @@ import org.elasticsearch.action.admin.indices.mapping.put.PutMappingRequest;
 import org.elasticsearch.action.admin.indices.open.OpenIndexRequest;
 import org.elasticsearch.action.admin.indices.refresh.RefreshRequest;
 import org.elasticsearch.action.admin.indices.rollover.RolloverRequest;
+import org.elasticsearch.action.admin.indices.settings.put.UpdateSettingsRequest;
 import org.elasticsearch.action.admin.indices.shrink.ResizeRequest;
 import org.elasticsearch.action.admin.indices.shrink.ResizeType;
 import org.elasticsearch.action.bulk.BulkRequest;
@@ -279,7 +280,6 @@ public class RequestTests extends ESTestCase {
         Map<String, String> expectedParams = new HashMap<>();
         setRandomIndicesOptions(getIndexRequest::indicesOptions, getIndexRequest::indicesOptions, expectedParams);
         setRandomLocal(getIndexRequest, expectedParams);
-        setRandomFlatSettings(getIndexRequest::flatSettings, expectedParams);
         setRandomHumanReadable(getIndexRequest, expectedParams);
         setRandomIncludeDefaults(getIndexRequest, expectedParams);
 
@@ -1157,7 +1157,7 @@ public class RequestTests extends ESTestCase {
 
         List<SearchRequest> requests = new ArrayList<>();
         CheckedBiConsumer<SearchRequest, XContentParser, IOException> consumer = (searchRequest, p) -> {
-            SearchSourceBuilder searchSourceBuilder = SearchSourceBuilder.fromXContent(p);
+            SearchSourceBuilder searchSourceBuilder = SearchSourceBuilder.fromXContent(p, false);
             if (searchSourceBuilder.equals(new SearchSourceBuilder()) == false) {
                 searchRequest.source(searchSourceBuilder);
             }
@@ -1321,7 +1321,6 @@ public class RequestTests extends ESTestCase {
     public void testClusterPutSettings() throws IOException {
         ClusterUpdateSettingsRequest request = new ClusterUpdateSettingsRequest();
         Map<String, String> expectedParams = new HashMap<>();
-        setRandomFlatSettings(request::flatSettings, expectedParams);
         setRandomMasterTimeout(request, expectedParams);
         setRandomTimeout(request::timeout, AcknowledgedRequest.DEFAULT_ACK_TIMEOUT, expectedParams);
 
@@ -1367,6 +1366,32 @@ public class RequestTests extends ESTestCase {
         }
         assertEquals(HttpPost.METHOD_NAME, request.getMethod());
         assertToXContentBody(rolloverRequest, request.getEntity());
+        assertEquals(expectedParams, request.getParameters());
+    }
+
+    public void testIndexPutSettings() throws IOException {
+        String[] indices = randomBoolean() ? null : randomIndicesNames(0, 2);
+        UpdateSettingsRequest updateSettingsRequest = new UpdateSettingsRequest(indices);
+        Map<String, String> expectedParams = new HashMap<>();
+        setRandomMasterTimeout(updateSettingsRequest, expectedParams);
+        setRandomTimeout(updateSettingsRequest::timeout, AcknowledgedRequest.DEFAULT_ACK_TIMEOUT, expectedParams);
+        setRandomIndicesOptions(updateSettingsRequest::indicesOptions, updateSettingsRequest::indicesOptions, expectedParams);
+        if (randomBoolean()) {
+            updateSettingsRequest.setPreserveExisting(randomBoolean());
+            if (updateSettingsRequest.isPreserveExisting()) {
+                expectedParams.put("preserve_existing", "true");
+            }
+        }
+
+        Request request = Request.indexPutSettings(updateSettingsRequest);
+        StringJoiner endpoint = new StringJoiner("/", "/", "");
+        if (indices != null && indices.length > 0) {
+            endpoint.add(String.join(",", indices));
+        }
+        endpoint.add("_settings");
+        assertThat(endpoint.toString(), equalTo(request.getEndpoint()));
+        assertEquals(HttpPut.METHOD_NAME, request.getMethod());
+        assertToXContentBody(updateSettingsRequest, request.getEntity());
         assertEquals(expectedParams, request.getParameters());
     }
 
@@ -1627,16 +1652,6 @@ public class RequestTests extends ESTestCase {
             expectedParams.put("timeout", timeout);
         } else {
             expectedParams.put("timeout", defaultTimeout.getStringRep());
-        }
-    }
-
-    private static void setRandomFlatSettings(Consumer<Boolean> setter, Map<String, String> expectedParams) {
-        if (randomBoolean()) {
-            boolean flatSettings = randomBoolean();
-            setter.accept(flatSettings);
-            if (flatSettings) {
-                expectedParams.put("flat_settings", String.valueOf(flatSettings));
-            }
         }
     }
 

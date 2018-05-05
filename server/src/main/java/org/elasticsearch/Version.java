@@ -35,6 +35,7 @@ import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 public class Version implements Comparable<Version>, ToXContentFragment {
     /*
@@ -165,7 +166,10 @@ public class Version implements Comparable<Version>, ToXContentFragment {
     public static final Version V_6_2_5 = new Version(V_6_2_5_ID, LUCENE_7_2_1);
     public static final int V_6_3_0_ID = 6030099;
     public static final Version V_6_3_0 = new Version(V_6_3_0_ID, org.apache.lucene.util.Version.LUCENE_7_3_0);
-    public static final Version CURRENT = V_6_3_0;
+    public static final int V_6_4_0_ID = 6040099;
+    public static final Version V_6_4_0 = new Version(V_6_4_0_ID, org.apache.lucene.util.Version.LUCENE_7_4_0);
+
+    public static final Version CURRENT = V_6_4_0;
 
     static {
         assert CURRENT.luceneVersion.equals(org.apache.lucene.util.Version.LATEST) : "Version must be upgraded to ["
@@ -178,6 +182,8 @@ public class Version implements Comparable<Version>, ToXContentFragment {
 
     public static Version fromId(int id) {
         switch (id) {
+            case V_6_4_0_ID:
+                return V_6_4_0;
             case V_6_3_0_ID:
                 return V_6_3_0;
             case V_6_2_5_ID:
@@ -491,8 +497,16 @@ public class Version implements Comparable<Version>, ToXContentFragment {
 
     @SuppressForbidden(reason = "System.out.*")
     public static void main(String[] args) {
-        System.out.println("Version: " + Version.CURRENT + ", Build: " + Build.CURRENT.shortHash() + "/" + Build.CURRENT.date() + ", JVM: "
-                + JvmInfo.jvmInfo().version());
+        final String versionOutput = String.format(
+                Locale.ROOT,
+                "Version: %s, Build: %s/%s/%s/%s, JVM: %s",
+                Version.displayVersion(Version.CURRENT, Build.CURRENT.isSnapshot()),
+                Build.CURRENT.flavor().displayName(),
+                Build.CURRENT.type().displayName(),
+                Build.CURRENT.shortHash(),
+                Build.CURRENT.date(),
+                JvmInfo.jvmInfo().version());
+        System.out.println(versionOutput);
     }
 
     @Override

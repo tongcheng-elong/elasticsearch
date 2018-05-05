@@ -435,7 +435,7 @@ public class InternalEngine extends Engine {
     }
 
     @Override
-    public Translog getTranslog() {
+    Translog getTranslog() {
         ensureOpen();
         return translog;
     }
@@ -636,7 +636,7 @@ public class InternalEngine extends Engine {
             assert incrementIndexVersionLookup(); // used for asserting in tests
             final long currentVersion = loadCurrentVersionFromIndex(op.uid());
             if (currentVersion != Versions.NOT_FOUND) {
-                versionValue = new VersionValue(currentVersion, SequenceNumbers.UNASSIGNED_SEQ_NO, 0L);
+                versionValue = new IndexVersionValue(null, currentVersion, SequenceNumbers.UNASSIGNED_SEQ_NO, 0L);
             }
         } else if (engineConfig.isEnableGcDeletes() && versionValue.isDelete() &&
             (engineConfig.getThreadPool().relativeTimeInMillis() - ((DeleteVersionValue)versionValue).time) > getGcDeletesInMillis()) {
@@ -804,7 +804,7 @@ public class InternalEngine extends Engine {
                 final IndexResult indexResult;
                 if (plan.earlyResultOnPreFlightError.isPresent()) {
                     indexResult = plan.earlyResultOnPreFlightError.get();
-                    assert indexResult.hasFailure();
+                    assert indexResult.getResultType() == Result.Type.FAILURE : indexResult.getResultType();
                 } else if (plan.indexIntoLucene) {
                     indexResult = indexIntoLucene(index, plan);
                 } else {
@@ -813,7 +813,7 @@ public class InternalEngine extends Engine {
                 }
                 if (index.origin() != Operation.Origin.LOCAL_TRANSLOG_RECOVERY) {
                     final Translog.Location location;
-                    if (indexResult.hasFailure() == false) {
+                    if (indexResult.getResultType() == Result.Type.SUCCESS) {
                         location = translog.add(new Translog.Index(index, indexResult));
                     } else if (indexResult.getSeqNo() != SequenceNumbers.UNASSIGNED_SEQ_NO) {
                         // if we have document failure, record it as a no-op in the translog with the generated seq_no
@@ -823,9 +823,10 @@ public class InternalEngine extends Engine {
                     }
                     indexResult.setTranslogLocation(location);
                 }
-                if (plan.indexIntoLucene && indexResult.hasFailure() == false) {
-                    versionMap.maybePutUnderLock(index.uid().bytes(),
-                        getVersionValue(plan.versionForIndexing, plan.seqNoForIndexing, index.primaryTerm(), indexResult.getTranslogLocation()));
+                if (plan.indexIntoLucene && indexResult.getResultType() == Result.Type.SUCCESS) {
+                    final Translog.Location translogLocation = trackTranslogLocation.get() ? indexResult.getTranslogLocation() : null;
+                    versionMap.maybePutIndexUnderLock(index.uid().bytes(),
+                        new IndexVersionValue(translogLocation, plan.versionForIndexing, plan.seqNoForIndexing, index.primaryTerm()));
                 }
                 if (indexResult.getSeqNo() != SequenceNumbers.UNASSIGNED_SEQ_NO) {
                     localCheckpointTracker.markSeqNoAsCompleted(indexResult.getSeqNo());
@@ -982,13 +983,6 @@ public class InternalEngine extends Engine {
         }
     }
 
-    private VersionValue getVersionValue(long version, long seqNo, long term, Translog.Location location) {
-        if (location != null && trackTranslogLocation.get()) {
-            return new TranslogVersionValue(location, version, seqNo, term);
-        }
-        return new VersionValue(version, seqNo, term);
-    }
-
     /**
      * returns true if the indexing operation may have already be processed by this engine.
      * Note that it is OK to rarely return true even if this is not the case. However a `false`
@@ -1138,7 +1132,7 @@ public class InternalEngine extends Engine {
             }
             if (delete.origin() != Operation.Origin.LOCAL_TRANSLOG_RECOVERY) {
                 final Translog.Location location;
-                if (deleteResult.hasFailure() == false) {
+                if (deleteResult.getResultType() == Result.Type.SUCCESS) {
                     location = translog.add(new Translog.Delete(delete, deleteResult));
                 } else if (deleteResult.getSeqNo() != SequenceNumbers.UNASSIGNED_SEQ_NO) {
                     location = translog.add(new Translog.NoOp(deleteResult.getSeqNo(),
@@ -1242,7 +1236,7 @@ public class InternalEngine extends Engine {
                 indexWriter.deleteDocuments(delete.uid());
                 numDocDeletes.inc();
             }
-            versionMap.putUnderLock(delete.uid().bytes(),
+            versionMap.putDeleteUnderLock(delete.uid().bytes(),
                 new DeleteVersionValue(plan.versionOfDeletion, plan.seqNoOfDeletion, delete.primaryTerm(),
                     engineConfig.getThreadPool().relativeTimeInMillis()));
             return new DeleteResult(
@@ -1324,8 +1318,10 @@ public class InternalEngine extends Engine {
         final long seqNo = noOp.seqNo();
         try {
             final NoOpResult noOpResult = new NoOpResult(noOp.seqNo());
-            final Translog.Location location = translog.add(new Translog.NoOp(noOp.seqNo(), noOp.primaryTerm(), noOp.reason()));
-            noOpResult.setTranslogLocation(location);
+            if (noOp.origin() != Operation.Origin.LOCAL_TRANSLOG_RECOVERY) {
+                final Translog.Location location = translog.add(new Translog.NoOp(noOp.seqNo(), noOp.primaryTerm(), noOp.reason()));
+                noOpResult.setTranslogLocation(location);
+            }
             noOpResult.setTook(System.nanoTime() - noOp.startTime());
             noOpResult.freeze();
             return noOpResult;

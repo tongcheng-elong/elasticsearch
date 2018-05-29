@@ -35,13 +35,12 @@ import org.elasticsearch.test.SecuritySettingsSourceField;
 import org.elasticsearch.test.discovery.TestZenDiscovery;
 import org.elasticsearch.tribe.TribePlugin;
 import org.elasticsearch.tribe.TribeService;
-import org.elasticsearch.xpack.core.security.SecurityLifecycleServiceField;
 import org.elasticsearch.xpack.core.security.action.role.GetRolesResponse;
 import org.elasticsearch.xpack.core.security.action.role.PutRoleResponse;
 import org.elasticsearch.xpack.core.security.action.user.PutUserResponse;
 import org.elasticsearch.xpack.core.security.authc.support.UsernamePasswordToken;
 import org.elasticsearch.xpack.core.security.client.SecurityClient;
-import org.elasticsearch.xpack.security.support.IndexLifecycleManager;
+import org.elasticsearch.xpack.security.support.SecurityIndexManager;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
@@ -60,6 +59,7 @@ import java.util.function.Function;
 import java.util.function.Predicate;
 
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertNoTimeout;
+import static org.elasticsearch.xpack.security.support.SecurityIndexManager.SECURITY_TEMPLATE_NAME;
 import static org.hamcrest.Matchers.anyOf;
 import static org.hamcrest.Matchers.arrayContaining;
 import static org.hamcrest.Matchers.containsString;
@@ -153,13 +153,13 @@ public class SecurityTribeTests extends NativeRealmIntegTestCase {
     public void tearDownTribeNodeAndWipeCluster() throws Exception {
         if (cluster2 != null) {
             try {
-                cluster2.wipe(Collections.singleton(SecurityLifecycleServiceField.SECURITY_TEMPLATE_NAME));
+                cluster2.wipe(Collections.singleton(SECURITY_TEMPLATE_NAME));
                 try {
                     // this is a hack to clean up the .security index since only the XPackSecurity user or superusers can delete it
                     final Client cluster2Client = cluster2.client().filterWithHeader(Collections.singletonMap("Authorization",
                             UsernamePasswordToken.basicAuthHeaderValue(SecuritySettingsSource.TEST_SUPERUSER,
                                     SecuritySettingsSourceField.TEST_PASSWORD_SECURE_STRING)));
-                    cluster2Client.admin().indices().prepareDelete(IndexLifecycleManager.INTERNAL_SECURITY_INDEX).get();
+                    cluster2Client.admin().indices().prepareDelete(SecurityIndexManager.INTERNAL_SECURITY_INDEX).get();
                 } catch (IndexNotFoundException e) {
                     // ignore it since not all tests create this index...
                 }
@@ -274,7 +274,9 @@ public class SecurityTribeTests extends NativeRealmIntegTestCase {
                 .put(internalCluster().getDefaultSettings())
                 .put(tribeSettings, false)
                 .put("tribe.t1.cluster.name", internalCluster().getClusterName())
+                .put("tribe.t1.transport.tcp.port", 0)
                 .put("tribe.t2.cluster.name", cluster2.getClusterName())
+                .put("tribe.t2.transport.tcp.port", 0)
                 .put("tribe.blocks.write", false)
                 .put("tribe.on_conflict", "prefer_t1")
                 .put(tribe1Defaults.build())

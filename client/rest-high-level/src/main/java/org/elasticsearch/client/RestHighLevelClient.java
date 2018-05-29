@@ -30,6 +30,8 @@ import org.elasticsearch.action.bulk.BulkRequest;
 import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.action.delete.DeleteRequest;
 import org.elasticsearch.action.delete.DeleteResponse;
+import org.elasticsearch.action.fieldcaps.FieldCapabilitiesRequest;
+import org.elasticsearch.action.fieldcaps.FieldCapabilitiesResponse;
 import org.elasticsearch.action.get.GetRequest;
 import org.elasticsearch.action.get.GetResponse;
 import org.elasticsearch.action.get.MultiGetRequest;
@@ -60,6 +62,8 @@ import org.elasticsearch.index.rankeval.RankEvalResponse;
 import org.elasticsearch.plugins.spi.NamedXContentProvider;
 import org.elasticsearch.rest.BytesRestResponse;
 import org.elasticsearch.rest.RestStatus;
+import org.elasticsearch.script.mustache.SearchTemplateRequest;
+import org.elasticsearch.script.mustache.SearchTemplateResponse;
 import org.elasticsearch.search.aggregations.Aggregation;
 import org.elasticsearch.search.aggregations.bucket.adjacency.AdjacencyMatrixAggregationBuilder;
 import org.elasticsearch.search.aggregations.bucket.adjacency.ParsedAdjacencyMatrix;
@@ -187,6 +191,7 @@ public class RestHighLevelClient implements Closeable {
 
     private final IndicesClient indicesClient = new IndicesClient(this);
     private final ClusterClient clusterClient = new ClusterClient(this);
+    private final SnapshotClient snapshotClient = new SnapshotClient(this);
 
     /**
      * Creates a {@link RestHighLevelClient} given the low level {@link RestClientBuilder} that allows to build the
@@ -248,6 +253,15 @@ public class RestHighLevelClient implements Closeable {
      */
     public final ClusterClient cluster() {
         return clusterClient;
+    }
+
+    /**
+     * Provides a {@link SnapshotClient} which can be used to access the Snapshot API.
+     *
+     * See <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/modules-snapshots.html">Snapshot API on elastic.co</a>
+     */
+    public final SnapshotClient snapshot() {
+        return snapshotClient;
     }
 
     /**
@@ -488,6 +502,32 @@ public class RestHighLevelClient implements Closeable {
     }
 
     /**
+     * Executes a request using the Search Template API.
+     *
+     * See <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/search-template.html">Search Template API
+     * on elastic.co</a>.
+     */
+    public final SearchTemplateResponse searchTemplate(SearchTemplateRequest searchTemplateRequest,
+                                                       Header... headers) throws IOException {
+        return performRequestAndParseEntity(searchTemplateRequest, RequestConverters::searchTemplate,
+            SearchTemplateResponse::fromXContent, emptySet(), headers);
+    }
+
+    /**
+     * Asynchronously executes a request using the Search Template API
+     *
+     * See <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/search-template.html">Search Template API
+     * on elastic.co</a>.
+     */
+    public final void searchTemplateAsync(SearchTemplateRequest searchTemplateRequest,
+                                          ActionListener<SearchTemplateResponse> listener,
+                                          Header... headers) {
+        performRequestAsyncAndParseEntity(searchTemplateRequest, RequestConverters::searchTemplate,
+            SearchTemplateResponse::fromXContent, listener, emptySet(), headers);
+    }
+
+
+    /**
      * Executes a request using the Ranking Evaluation API.
      *
      * See <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/search-rank-eval.html">Ranking Evaluation API
@@ -509,6 +549,31 @@ public class RestHighLevelClient implements Closeable {
                 emptySet(), headers);
     }
 
+    /**
+     * Executes a request using the Field Capabilities API.
+     *
+     * See <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/search-field-caps.html">Field Capabilities API
+     * on elastic.co</a>.
+     */
+    public final FieldCapabilitiesResponse fieldCaps(FieldCapabilitiesRequest fieldCapabilitiesRequest,
+                                                     Header... headers) throws IOException {
+        return performRequestAndParseEntity(fieldCapabilitiesRequest, RequestConverters::fieldCaps,
+            FieldCapabilitiesResponse::fromXContent, emptySet(), headers);
+    }
+
+    /**
+     * Asynchronously executes a request using the Field Capabilities API.
+     *
+     * See <a href="https://www.elastic.co/guide/en/elasticsearch/reference/current/search-field-caps.html">Field Capabilities API
+     * on elastic.co</a>.
+     */
+    public final void fieldCapsAsync(FieldCapabilitiesRequest fieldCapabilitiesRequest,
+                                     ActionListener<FieldCapabilitiesResponse> listener,
+                                     Header... headers) {
+        performRequestAsyncAndParseEntity(fieldCapabilitiesRequest, RequestConverters::fieldCaps,
+            FieldCapabilitiesResponse::fromXContent, listener, emptySet(), headers);
+    }
+
     protected final <Req extends ActionRequest, Resp> Resp performRequestAndParseEntity(Req request,
                                                                             CheckedFunction<Req, Request, IOException> requestConverter,
                                                                             CheckedFunction<XContentParser, Resp, IOException> entityParser,
@@ -525,7 +590,7 @@ public class RestHighLevelClient implements Closeable {
             throw validationException;
         }
         Request req = requestConverter.apply(request);
-        req.setHeaders(headers);
+        addHeaders(req, headers);
         Response response;
         try {
             response = client.performRequest(req);
@@ -575,10 +640,17 @@ public class RestHighLevelClient implements Closeable {
             listener.onFailure(e);
             return;
         }
-        req.setHeaders(headers);
+        addHeaders(req, headers);
 
         ResponseListener responseListener = wrapResponseListener(responseConverter, listener, ignores);
         client.performRequestAsync(req, responseListener);
+    }
+
+    private static void addHeaders(Request request, Header... headers) {
+        Objects.requireNonNull(headers, "headers cannot be null");
+        for (Header header : headers) {
+            request.addHeader(header.getName(), header.getValue());
+        }
     }
 
     final <Resp> ResponseListener wrapResponseListener(CheckedFunction<Response, Resp, IOException> responseConverter,

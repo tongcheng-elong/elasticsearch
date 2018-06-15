@@ -20,14 +20,15 @@ package org.elasticsearch.index.analysis;
 
 import org.apache.logging.log4j.Logger;
 import org.apache.lucene.analysis.Analyzer;
-import org.elasticsearch.core.internal.io.IOUtils;
-import org.elasticsearch.ElasticsearchException;
+import org.apache.lucene.analysis.core.WhitespaceTokenizer;
 import org.elasticsearch.Version;
+import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.logging.DeprecationLogger;
 import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.set.Sets;
+import org.elasticsearch.core.internal.io.IOUtils;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.index.Index;
 import org.elasticsearch.index.IndexSettings;
@@ -74,14 +75,16 @@ public final class AnalysisRegistry implements Closeable {
                             Map<String, AnalysisProvider<AnalyzerProvider<?>>> normalizers,
                             Map<String, PreConfiguredCharFilter> preConfiguredCharFilters,
                             Map<String, PreConfiguredTokenFilter> preConfiguredTokenFilters,
-                            Map<String, PreConfiguredTokenizer> preConfiguredTokenizers) {
+                            Map<String, PreConfiguredTokenizer> preConfiguredTokenizers,
+                            Map<String, PreBuiltAnalyzerProviderFactory> preConfiguredAnalyzers) {
         this.environment = environment;
         this.charFilters = unmodifiableMap(charFilters);
         this.tokenFilters = unmodifiableMap(tokenFilters);
         this.tokenizers = unmodifiableMap(tokenizers);
         this.analyzers = unmodifiableMap(analyzers);
         this.normalizers = unmodifiableMap(normalizers);
-        prebuiltAnalysis = new PrebuiltAnalysis(preConfiguredCharFilters, preConfiguredTokenFilters, preConfiguredTokenizers);
+        prebuiltAnalysis =
+            new PrebuiltAnalysis(preConfiguredCharFilters, preConfiguredTokenFilters, preConfiguredTokenizers, preConfiguredAnalyzers);
     }
 
     /**
@@ -402,13 +405,15 @@ public final class AnalysisRegistry implements Closeable {
         private PrebuiltAnalysis(
                 Map<String, PreConfiguredCharFilter> preConfiguredCharFilters,
                 Map<String, PreConfiguredTokenFilter> preConfiguredTokenFilters,
-                Map<String, PreConfiguredTokenizer> preConfiguredTokenizers) {
-            Map<String, PreBuiltAnalyzerProviderFactory> analyzerProviderFactories = new HashMap<>();
+                Map<String, PreConfiguredTokenizer> preConfiguredTokenizers,
+                Map<String, PreBuiltAnalyzerProviderFactory> preConfiguredAnalyzers) {
 
-            // Analyzers
+            Map<String, PreBuiltAnalyzerProviderFactory> analyzerProviderFactories = new HashMap<>();
+            analyzerProviderFactories.putAll(preConfiguredAnalyzers);
+            // Pre-build analyzers
             for (PreBuiltAnalyzers preBuiltAnalyzerEnum : PreBuiltAnalyzers.values()) {
                 String name = preBuiltAnalyzerEnum.name().toLowerCase(Locale.ROOT);
-                analyzerProviderFactories.put(name, new PreBuiltAnalyzerProviderFactory(name, AnalyzerScope.INDICES, preBuiltAnalyzerEnum.getAnalyzer(Version.CURRENT)));
+                analyzerProviderFactories.put(name, new PreBuiltAnalyzerProviderFactory(name, preBuiltAnalyzerEnum));
             }
 
             this.analyzerProviderFactories = Collections.unmodifiableMap(analyzerProviderFactories);
@@ -433,17 +438,10 @@ public final class AnalysisRegistry implements Closeable {
             return analyzerProviderFactories.get(name);
         }
 
-        Analyzer analyzer(String name) {
-            PreBuiltAnalyzerProviderFactory  analyzerProviderFactory = (PreBuiltAnalyzerProviderFactory) analyzerProviderFactories.get(name);
-            if (analyzerProviderFactory == null) {
-                return null;
-            }
-            return analyzerProviderFactory.analyzer();
-        }
-
         @Override
         public void close() throws IOException {
-            IOUtils.close(analyzerProviderFactories.values().stream().map((a) -> ((PreBuiltAnalyzerProviderFactory)a).analyzer()).collect(Collectors.toList()));
+            IOUtils.close(analyzerProviderFactories.values().stream()
+                .map((a) -> ((PreBuiltAnalyzerProviderFactory)a)).collect(Collectors.toList()));
         }
     }
 
@@ -461,13 +459,16 @@ public final class AnalysisRegistry implements Closeable {
         Map<String, NamedAnalyzer> analyzerAliases = new HashMap<>();
         Map<String, NamedAnalyzer> analyzers = new HashMap<>();
         Map<String, NamedAnalyzer> normalizers = new HashMap<>();
+        Map<String, NamedAnalyzer> whitespaceNormalizers = new HashMap<>();
         for (Map.Entry<String, AnalyzerProvider<?>> entry : analyzerProviders.entrySet()) {
             processAnalyzerFactory(deprecationLogger, indexSettings, entry.getKey(), entry.getValue(), analyzerAliases, analyzers,
                 tokenFilterFactoryFactories, charFilterFactoryFactories, tokenizerFactoryFactories);
         }
         for (Map.Entry<String, AnalyzerProvider<?>> entry : normalizerProviders.entrySet()) {
-            processNormalizerFactory(deprecationLogger, indexSettings, entry.getKey(), entry.getValue(), normalizers,
-                    tokenizerFactoryFactories.get("keyword"), tokenFilterFactoryFactories, charFilterFactoryFactories);
+            processNormalizerFactory(entry.getKey(), entry.getValue(), normalizers,
+                    "keyword", tokenizerFactoryFactories.get("keyword"), tokenFilterFactoryFactories, charFilterFactoryFactories);
+            processNormalizerFactory(entry.getKey(), entry.getValue(), whitespaceNormalizers,
+                    "whitespace", () -> new WhitespaceTokenizer(), tokenFilterFactoryFactories, charFilterFactoryFactories);
         }
         for (Map.Entry<String, NamedAnalyzer> entry : analyzerAliases.entrySet()) {
             String key = entry.getKey();
@@ -514,7 +515,7 @@ public final class AnalysisRegistry implements Closeable {
             }
         }
         return new IndexAnalyzers(indexSettings, defaultIndexAnalyzer, defaultSearchAnalyzer, defaultSearchQuoteAnalyzer,
-            unmodifiableMap(analyzers), unmodifiableMap(normalizers));
+            unmodifiableMap(analyzers), unmodifiableMap(normalizers), unmodifiableMap(whitespaceNormalizers));
     }
 
     private void processAnalyzerFactory(DeprecationLogger deprecationLogger,
@@ -581,16 +582,20 @@ public final class AnalysisRegistry implements Closeable {
         }
     }
 
-    private void processNormalizerFactory(DeprecationLogger deprecationLogger,
-            IndexSettings indexSettings,
-            String name,
+    private void processNormalizerFactory(String name,
             AnalyzerProvider<?> normalizerFactory,
             Map<String, NamedAnalyzer> normalizers,
-            TokenizerFactory keywordTokenizerFactory,
+            String tokenizerName,
+            TokenizerFactory tokenizerFactory,
             Map<String, TokenFilterFactory> tokenFilters,
             Map<String, CharFilterFactory> charFilters) {
+
+        if (tokenizerFactory == null) {
+            throw new IllegalStateException("keyword tokenizer factory is null, normalizers require analysis-common module");
+        }
+
         if (normalizerFactory instanceof CustomNormalizerProvider) {
-            ((CustomNormalizerProvider) normalizerFactory).build(keywordTokenizerFactory, charFilters, tokenFilters);
+            ((CustomNormalizerProvider) normalizerFactory).build(tokenizerName, tokenizerFactory, charFilters, tokenFilters);
         }
         Analyzer normalizerF = normalizerFactory.get();
         if (normalizerF == null) {

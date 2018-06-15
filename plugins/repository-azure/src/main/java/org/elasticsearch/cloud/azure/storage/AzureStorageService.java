@@ -33,6 +33,7 @@ import org.elasticsearch.common.unit.TimeValue;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URISyntaxException;
+import java.nio.file.FileAlreadyExistsException;
 import java.util.Map;
 
 /**
@@ -78,11 +79,8 @@ public interface AzureStorageService {
     Map<String,BlobMetaData> listBlobsByPrefix(String account, LocationMode mode, String container, String keyPath, String prefix)
         throws URISyntaxException, StorageException;
 
-    void moveBlob(String account, LocationMode mode, String container, String sourceBlob, String targetBlob)
-        throws URISyntaxException, StorageException;
-
     void writeBlob(String account, LocationMode mode, String container, String blobName, InputStream inputStream, long blobSize) throws
-        URISyntaxException, StorageException;
+        URISyntaxException, StorageException, FileAlreadyExistsException;
 
     static InputStream giveSocketPermissionsToStream(InputStream stream) {
         return new InputStream() {

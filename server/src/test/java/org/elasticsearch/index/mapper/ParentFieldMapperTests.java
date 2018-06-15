@@ -115,7 +115,7 @@ public class ParentFieldMapperTests extends ESSingleNodeTestCase {
         IndexSettings indexSettings = IndexSettingsModule.newIndexSettings(index, Settings.EMPTY);
         NamedAnalyzer namedAnalyzer = new NamedAnalyzer("default", AnalyzerScope.INDEX, new StandardAnalyzer());
         IndexAnalyzers indexAnalyzers = new IndexAnalyzers(indexSettings, namedAnalyzer, namedAnalyzer, namedAnalyzer,
-            Collections.emptyMap(), Collections.emptyMap());
+            Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap());
         SimilarityService similarityService = new SimilarityService(indexSettings, null, Collections.emptyMap());
         MapperService mapperService = new MapperService(indexSettings, indexAnalyzers, xContentRegistry(), similarityService,
             new IndicesModule(emptyList()).getMapperRegistry(), () -> null);
@@ -124,7 +124,7 @@ public class ParentFieldMapperTests extends ESSingleNodeTestCase {
             .endObject()
             .endObject().endObject();
         mapperService.merge("some_type", new CompressedXContent(Strings.toString(mappingSource)), MergeReason.MAPPING_UPDATE, false);
-        Set<String> allFields = new HashSet<>(mapperService.simpleMatchToIndexNames("*"));
+        Set<String> allFields = new HashSet<>(mapperService.simpleMatchToFullName("*"));
         assertTrue(allFields.contains("_parent"));
         assertFalse(allFields.contains("_parent#null"));
         MappedFieldType fieldType = mapperService.fullName("_parent");

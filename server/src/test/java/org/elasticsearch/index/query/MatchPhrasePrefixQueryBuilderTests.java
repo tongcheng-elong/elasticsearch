@@ -61,7 +61,7 @@ public class MatchPhrasePrefixQueryBuilderTests extends AbstractQueryTestCase<Ma
 
         MatchPhrasePrefixQueryBuilder matchQuery = new MatchPhrasePrefixQueryBuilder(fieldName, value);
 
-        if (randomBoolean()) {
+        if (randomBoolean() && fieldName.equals(STRING_FIELD_NAME)) {
             matchQuery.analyzer(randomFrom("simple", "keyword", "whitespace"));
         }
 
@@ -108,6 +108,14 @@ public class MatchPhrasePrefixQueryBuilderTests extends AbstractQueryTestCase<Ma
 
         MatchPhrasePrefixQueryBuilder matchQuery = new MatchPhrasePrefixQueryBuilder("fieldName", "text");
         e = expectThrows(IllegalArgumentException.class, () -> matchQuery.maxExpansions(-1));
+    }
+
+    public void testPhraseOnFieldWithNoTerms() throws IOException {
+        assumeTrue("test runs only when at least a type is registered", getCurrentTypes().length > 0);
+        MatchPhrasePrefixQueryBuilder matchQuery = new MatchPhrasePrefixQueryBuilder(DATE_FIELD_NAME, "three term phrase");
+        matchQuery.analyzer("whitespace");
+        matchQuery.doToQuery(createShardContext());
+        assertWarnings("Attempted to build a phrase query with multiple terms against non-text field [" + DATE_FIELD_NAME + "]");
     }
 
     public void testBadAnalyzer() throws IOException {

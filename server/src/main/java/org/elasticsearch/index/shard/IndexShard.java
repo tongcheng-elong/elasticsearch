@@ -84,7 +84,6 @@ import org.elasticsearch.index.engine.EngineConfig;
 import org.elasticsearch.index.engine.EngineException;
 import org.elasticsearch.index.engine.EngineFactory;
 import org.elasticsearch.index.engine.InternalEngine;
-import org.elasticsearch.index.engine.InternalEngineFactory;
 import org.elasticsearch.index.engine.RefreshFailedEngineException;
 import org.elasticsearch.index.engine.Segment;
 import org.elasticsearch.index.engine.SegmentsStats;
@@ -196,7 +195,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     protected volatile IndexShardState state;
     protected volatile long primaryTerm;
     protected final AtomicReference<Engine> currentEngineReference = new AtomicReference<>();
-    protected final EngineFactory engineFactory;
+    final EngineFactory engineFactory;
 
     private final IndexingOperationListener indexingOperationListeners;
     private final Runnable globalCheckpointSyncer;
@@ -266,7 +265,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         this.warmer = warmer;
         this.similarityService = similarityService;
         Objects.requireNonNull(store, "Store must be provided to the index shard");
-        this.engineFactory = engineFactory == null ? new InternalEngineFactory() : engineFactory;
+        this.engineFactory = Objects.requireNonNull(engineFactory);
         this.store = store;
         this.indexSortSupplier = indexSortSupplier;
         this.indexEventListener = indexEventListener;
@@ -408,7 +407,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                     final Engine engine = getEngine();
                     if (currentRouting.isRelocationTarget() == false || recoverySourceNode.getVersion().before(Version.V_6_0_0_alpha1)) {
                         // there was no primary context hand-off in < 6.0.0, need to manually activate the shard
-                        replicationTracker.activatePrimaryMode(getEngine().getLocalCheckpointTracker().getCheckpoint());
+                        replicationTracker.activatePrimaryMode(getEngine().getLocalCheckpoint());
                     }
                     if (currentRouting.isRelocationTarget() == true && recoverySourceNode.getVersion().before(Version.V_6_0_0_alpha1)) {
                         // Flush the translog as it may contain operations with no sequence numbers. We want to make sure those
@@ -498,8 +497,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                                  */
                                 engine.rollTranslogGeneration();
                                 engine.fillSeqNoGaps(newPrimaryTerm);
-                                replicationTracker.updateLocalCheckpoint(currentRouting.allocationId().getId(),
-                                    getEngine().getLocalCheckpointTracker().getCheckpoint());
+                                replicationTracker.updateLocalCheckpoint(currentRouting.allocationId().getId(), getLocalCheckpoint());
                                 primaryReplicaSyncer.accept(this, new ActionListener<ResyncTask>() {
                                     @Override
                                     public void onResponse(ResyncTask resyncTask) {
@@ -525,7 +523,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                             }
                         },
                         e -> failShard("exception during primary term transition", e));
-                    replicationTracker.activatePrimaryMode(getEngine().getLocalCheckpointTracker().getCheckpoint());
+                    replicationTracker.activatePrimaryMode(getLocalCheckpoint());
                     primaryTerm = newPrimaryTerm;
                 }
             }
@@ -906,7 +904,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     @Nullable
     public SeqNoStats seqNoStats() {
         Engine engine = getEngineOrNull();
-        return engine == null ? null : engine.getLocalCheckpointTracker().getStats(replicationTracker.getGlobalCheckpoint());
+        return engine == null ? null : engine.getSeqNoStats(replicationTracker.getGlobalCheckpoint());
     }
 
     public IndexingStats indexingStats(String... types) {
@@ -1023,7 +1021,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     public void trimTranslog() {
         verifyNotClosed();
         final Engine engine = getEngine();
-        engine.trimTranslog();
+        engine.trimUnreferencedTranslogFiles();
     }
 
     /**
@@ -1224,6 +1222,10 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         }
         recoveryState.setStage(RecoveryState.Stage.INDEX);
         assert currentEngineReference.get() == null;
+    }
+
+    public void trimOperationOfPreviousPrimaryTerms(long aboveSeqNo) {
+        getEngine().trimOperationsFromTranslog(primaryTerm, aboveSeqNo);
     }
 
     public Engine.Result applyTranslogOperation(Translog.Operation operation, Engine.Operation.Origin origin) throws IOException {
@@ -1739,7 +1741,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      * @throws InterruptedException if the thread was interrupted while blocking on the condition
      */
     public void waitForOpsToComplete(final long seqNo) throws InterruptedException {
-        getEngine().getLocalCheckpointTracker().waitForOpsToComplete(seqNo);
+        getEngine().waitForOpsToComplete(seqNo);
     }
 
     /**
@@ -1772,7 +1774,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      * @return the local checkpoint
      */
     public long getLocalCheckpoint() {
-        return getEngine().getLocalCheckpointTracker().getCheckpoint();
+        return getEngine().getLocalCheckpoint();
     }
 
     /**
@@ -1813,7 +1815,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             return;
         }
         // only sync if there are not operations in flight
-        final SeqNoStats stats = getEngine().getLocalCheckpointTracker().getStats(replicationTracker.getGlobalCheckpoint());
+        final SeqNoStats stats = getEngine().getSeqNoStats(replicationTracker.getGlobalCheckpoint());
         if (stats.getMaxSeqNo() == stats.getGlobalCheckpoint()) {
             final ObjectLongMap<String> globalCheckpoints = getInSyncGlobalCheckpoints();
             final String allocationId = routingEntry().allocationId().getId();
@@ -1850,7 +1852,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
      */
     public void updateGlobalCheckpointOnReplica(final long globalCheckpoint, final String reason) {
         verifyReplicationTarget();
-        final long localCheckpoint = getEngine().getLocalCheckpointTracker().getCheckpoint();
+        final long localCheckpoint = getLocalCheckpoint();
         if (globalCheckpoint > localCheckpoint) {
             /*
              * This can happen during recovery when the shard has started its engine but recovery is not finalized and is receiving global
@@ -1879,8 +1881,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         verifyPrimary();
         assert shardRouting.isRelocationTarget() : "only relocation target can update allocation IDs from primary context: " + shardRouting;
         assert primaryContext.getCheckpointStates().containsKey(routingEntry().allocationId().getId()) &&
-            getEngine().getLocalCheckpointTracker().getCheckpoint() ==
-                primaryContext.getCheckpointStates().get(routingEntry().allocationId().getId()).getLocalCheckpoint();
+            getLocalCheckpoint() == primaryContext.getCheckpointStates().get(routingEntry().allocationId().getId()).getLocalCheckpoint();
         synchronized (mutex) {
             replicationTracker.activateWithPrimaryContext(primaryContext); // make changes to primaryMode flag only under mutex
         }
@@ -2266,7 +2267,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                                     operationPrimaryTerm,
                                     getLocalCheckpoint(),
                                     localCheckpoint);
-                            getEngine().getLocalCheckpointTracker().resetCheckpoint(localCheckpoint);
+                            getEngine().resetLocalCheckpoint(localCheckpoint);
                             getEngine().rollTranslogGeneration();
                         });
                         globalCheckpointUpdated = true;

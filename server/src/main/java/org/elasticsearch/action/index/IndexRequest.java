@@ -38,7 +38,6 @@ import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.lucene.uid.Versions;
 import org.elasticsearch.common.unit.ByteSizeValue;
-import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentHelper;
@@ -431,7 +430,7 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
 
 
     /**
-     * Set to <tt>true</tt> to force this index to use {@link OpType#CREATE}.
+     * Set to {@code true} to force this index to use {@link OpType#CREATE}.
      */
     public IndexRequest create(boolean create) {
         if (create) {
@@ -532,7 +531,7 @@ public class IndexRequest extends ReplicatedWriteRequest<IndexRequest> implement
         parent = in.readOptionalString();
         if (in.getVersion().before(Version.V_6_0_0_alpha1)) {
             in.readOptionalString(); // timestamp
-            in.readOptionalWriteable(TimeValue::new); // ttl
+            in.readOptionalTimeValue(); // ttl
         }
         source = in.readBytesReference();
         opType = OpType.fromId(in.readByte());

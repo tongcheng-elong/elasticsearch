@@ -163,6 +163,7 @@ forbiddenPatterns {
 
 task generateModulesList {
   List<String> modules = project(':modules').subprojects.collect { it.name }
+  modules.add('x-pack')
   File modulesFile = new File(buildDir, 'generated-resources/modules.txt')
   processResources.from(modulesFile)
   inputs.property('modules', modules)
@@ -331,7 +332,7 @@ if (isEclipse == false || project.path == ":server-tests") {
                  dependsOn: test.dependsOn) {
     configure(BuildPlugin.commonTestConfig(project))
     classpath = project.test.classpath
-    testClassesDir = project.test.testClassesDir
+    testClassesDirs = project.test.testClassesDirs
     include '**/*IT.class'
   }
   check.dependsOn integTest

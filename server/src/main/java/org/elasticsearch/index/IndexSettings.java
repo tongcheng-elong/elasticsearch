@@ -80,8 +80,9 @@ public final class IndexSettings {
             (value) -> Translog.Durability.valueOf(value.toUpperCase(Locale.ROOT)), Property.Dynamic, Property.IndexScope);
     public static final Setting<Boolean> INDEX_WARMER_ENABLED_SETTING =
         Setting.boolSetting("index.warmer.enabled", true, Property.Dynamic, Property.IndexScope);
+    @Deprecated
     public static final Setting<Boolean> INDEX_TTL_DISABLE_PURGE_SETTING =
-        Setting.boolSetting("index.ttl.disable_purge", false, Property.Dynamic, Property.IndexScope);
+        Setting.boolSetting("index.ttl.disable_purge", false, Property.Dynamic, Property.IndexScope, Property.Deprecated);
     public static final Setting<String> INDEX_CHECK_ON_STARTUP = new Setting<>("index.shard.check_on_startup", "false", (s) -> {
         switch(s) {
             case "false":
@@ -188,7 +189,7 @@ public final class IndexSettings {
     public static final Setting<ByteSizeValue> INDEX_TRANSLOG_FLUSH_THRESHOLD_SIZE_SETTING =
         Setting.byteSizeSetting("index.translog.flush_threshold_size", new ByteSizeValue(512, ByteSizeUnit.MB),
             /*
-             * An empty translog occupies 43 bytes on disk. If the flush threshold is below this, the flush thread
+             * An empty translog occupies 55 bytes on disk. If the flush threshold is below this, the flush thread
              * can get stuck in an infinite loop as the shouldPeriodicallyFlush can still be true after flushing.
              * However, small thresholds are useful for testing so we do not add a large lower bound here.
              */
@@ -223,7 +224,7 @@ public final class IndexSettings {
                     "index.translog.generation_threshold_size",
                     new ByteSizeValue(64, ByteSizeUnit.MB),
                     /*
-                     * An empty translog occupies 43 bytes on disk. If the generation threshold is
+                     * An empty translog occupies 55 bytes on disk. If the generation threshold is
                      * below this, the flush thread can get stuck in an infinite loop repeatedly
                      * rolling the generation as every new generation will already exceed the
                      * generation threshold. However, small thresholds are useful for testing so we
@@ -252,6 +253,12 @@ public final class IndexSettings {
      */
     public static final Setting<Integer> MAX_SLICES_PER_SCROLL = Setting.intSetting("index.max_slices_per_scroll",
         1024, 1, Property.Dynamic, Property.IndexScope);
+
+    /**
+     * The maximum length of regex string allowed in a regexp query.
+     */
+    public static final Setting<Integer> MAX_REGEX_LENGTH_SETTING = Setting.intSetting("index.max_regex_length",
+        1000, 1, Property.Dynamic, Property.IndexScope);
 
     public static final String INDEX_MAPPING_SINGLE_TYPE_SETTING_KEY = "index.mapping.single_type";
     private static final Setting<Boolean> INDEX_MAPPING_SINGLE_TYPE_SETTING; // private - should not be registered
@@ -302,7 +309,6 @@ public final class IndexSettings {
     private volatile int maxScriptFields;
     private volatile int maxNgramDiff;
     private volatile int maxShingleDiff;
-    private volatile boolean TTLPurgeDisabled;
     private volatile int maxAnalyzedOffset;
     private volatile int maxTermsCount;
 
@@ -314,6 +320,12 @@ public final class IndexSettings {
      * The maximum number of slices allowed in a scroll request.
      */
     private volatile int maxSlicesPerScroll;
+
+    /**
+     * The maximum length of regex string allowed in a regexp query.
+     */
+    private volatile int maxRegexLength;
+
     /**
      * Whether the index is required to have at most one type.
      */
@@ -410,11 +422,11 @@ public final class IndexSettings {
         maxScriptFields = scopedSettings.get(MAX_SCRIPT_FIELDS_SETTING);
         maxNgramDiff = scopedSettings.get(MAX_NGRAM_DIFF_SETTING);
         maxShingleDiff = scopedSettings.get(MAX_SHINGLE_DIFF_SETTING);
-        TTLPurgeDisabled = scopedSettings.get(INDEX_TTL_DISABLE_PURGE_SETTING);
         maxRefreshListeners = scopedSettings.get(MAX_REFRESH_LISTENERS_PER_SHARD);
         maxSlicesPerScroll = scopedSettings.get(MAX_SLICES_PER_SCROLL);
         maxAnalyzedOffset = scopedSettings.get(MAX_ANALYZED_OFFSET_SETTING);
         maxTermsCount = scopedSettings.get(MAX_TERMS_COUNT_SETTING);
+        maxRegexLength = scopedSettings.get(MAX_REGEX_LENGTH_SETTING);
         this.mergePolicyConfig = new MergePolicyConfig(logger, this);
         this.indexSortConfig = new IndexSortConfig(this);
         singleType = INDEX_MAPPING_SINGLE_TYPE_SETTING.get(indexMetaData.getSettings()); // get this from metadata - it's not registered
@@ -436,7 +448,6 @@ public final class IndexSettings {
             mergeSchedulerConfig::setMaxThreadAndMergeCount);
         scopedSettings.addSettingsUpdateConsumer(MergeSchedulerConfig.AUTO_THROTTLE_SETTING, mergeSchedulerConfig::setAutoThrottle);
         scopedSettings.addSettingsUpdateConsumer(INDEX_TRANSLOG_DURABILITY_SETTING, this::setTranslogDurability);
-        scopedSettings.addSettingsUpdateConsumer(INDEX_TTL_DISABLE_PURGE_SETTING, this::setTTLPurgeDisabled);
         scopedSettings.addSettingsUpdateConsumer(MAX_RESULT_WINDOW_SETTING, this::setMaxResultWindow);
         scopedSettings.addSettingsUpdateConsumer(MAX_INNER_RESULT_WINDOW_SETTING, this::setMaxInnerResultWindow);
         scopedSettings.addSettingsUpdateConsumer(MAX_ADJACENCY_MATRIX_FILTERS_SETTING, this::setMaxAdjacencyMatrixFilters);
@@ -459,6 +470,7 @@ public final class IndexSettings {
         scopedSettings.addSettingsUpdateConsumer(MAX_TERMS_COUNT_SETTING, this::setMaxTermsCount);
         scopedSettings.addSettingsUpdateConsumer(MAX_SLICES_PER_SCROLL, this::setMaxSlicesPerScroll);
         scopedSettings.addSettingsUpdateConsumer(DEFAULT_FIELD_SETTING, this::setDefaultFields);
+        scopedSettings.addSettingsUpdateConsumer(MAX_REGEX_LENGTH_SETTING, this::setMaxRegexLength);
     }
 
     private void setTranslogFlushThresholdSize(ByteSizeValue byteSizeValue) {
@@ -621,7 +633,7 @@ public final class IndexSettings {
     }
 
     /**
-     * Returns this interval in which the shards of this index are asynchronously refreshed. <tt>-1</tt> means async refresh is disabled.
+     * Returns this interval in which the shards of this index are asynchronously refreshed. {@code -1} means async refresh is disabled.
      */
     public TimeValue getRefreshInterval() {
         return refreshInterval;
@@ -774,18 +786,6 @@ public final class IndexSettings {
         return mergePolicyConfig.getMergePolicy();
     }
 
-    /**
-     * Returns <code>true</code> if the TTL purge is disabled for this index. Default is <code>false</code>
-     */
-    public boolean isTTLPurgeDisabled() {
-        return TTLPurgeDisabled;
-    }
-
-    private  void setTTLPurgeDisabled(boolean ttlPurgeDisabled) {
-        this.TTLPurgeDisabled = ttlPurgeDisabled;
-    }
-
-
     public <T> T getValue(Setting<T> setting) {
         return scopedSettings.get(setting);
     }
@@ -810,6 +810,17 @@ public final class IndexSettings {
 
     private void setMaxSlicesPerScroll(int value) {
         this.maxSlicesPerScroll = value;
+    }
+
+    /**
+     * The maximum length of regex string allowed in a regexp query.
+     */
+    public int getMaxRegexLength() {
+        return maxRegexLength;
+    }
+
+    private void setMaxRegexLength(int maxRegexLength) {
+        this.maxRegexLength = maxRegexLength;
     }
 
     /**

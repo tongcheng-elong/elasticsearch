@@ -19,7 +19,6 @@
 
 package org.elasticsearch.search.builder;
 
-import org.elasticsearch.ElasticsearchParseException;
 import org.elasticsearch.common.ParsingException;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.io.stream.BytesStreamOutput;
@@ -65,6 +64,20 @@ public class SearchSourceBuilderTests extends AbstractSearchTestCase {
         }
         testSearchSourceBuilder.toXContent(builder, ToXContent.EMPTY_PARAMS);
         assertParseSearchSource(testSearchSourceBuilder, createParser(builder));
+    }
+
+    public void testFromXContentInvalid() throws IOException {
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, "{}}")) {
+            SearchSourceBuilder.fromXContent(parser);
+            assertWarnings("Found extra tokens after the _search request body, " +
+                "an error will be thrown in the next major version");
+        }
+
+        try (XContentParser parser = createParser(JsonXContent.jsonXContent, "{}{}")) {
+            SearchSourceBuilder.fromXContent(parser);
+            assertWarnings("Found extra tokens after the _search request body, " +
+                "an error will be thrown in the next major version");
+        }
     }
 
     private static void assertParseSearchSource(SearchSourceBuilder testBuilder, XContentParser parser) throws IOException {
@@ -332,7 +345,7 @@ public class SearchSourceBuilderTests extends AbstractSearchTestCase {
         final int timeout = randomIntBetween(1, 1024);
         final String query = "{ \"query\": { \"match_all\": {}}, \"timeout\": \"" + timeout + "\"}";
         try (XContentParser parser = createParser(JsonXContent.jsonXContent, query)) {
-            final ElasticsearchParseException e = expectThrows(ElasticsearchParseException.class, () -> SearchSourceBuilder.fromXContent(
+            final IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> SearchSourceBuilder.fromXContent(
                     parser));
             assertThat(e, hasToString(containsString("unit is missing or unrecognized")));
         }

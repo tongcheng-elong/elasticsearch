@@ -18,12 +18,12 @@
  */
 package org.elasticsearch.action.admin.cluster.node.tasks;
 
+import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.ElasticsearchTimeoutException;
 import org.elasticsearch.ExceptionsHelper;
 import org.elasticsearch.ResourceNotFoundException;
 import org.elasticsearch.action.ActionFuture;
 import org.elasticsearch.action.ActionListener;
-import org.elasticsearch.action.FailedNodeException;
 import org.elasticsearch.action.TaskOperationFailure;
 import org.elasticsearch.action.admin.cluster.health.ClusterHealthAction;
 import org.elasticsearch.action.admin.cluster.node.tasks.cancel.CancelTasksResponse;
@@ -357,7 +357,7 @@ public class TasksIT extends ESIntegTestCase {
             .setRefreshPolicy(WriteRequest.RefreshPolicy.IMMEDIATE).get();
 
         Map<String, String> headers = new HashMap<>();
-        headers.put("X-Opaque-Id", "my_id");
+        headers.put(Task.X_OPAQUE_ID, "my_id");
         headers.put("Foo-Header", "bar");
         headers.put("Custom-Task-Header", "my_value");
         assertSearchResponse(
@@ -404,7 +404,7 @@ public class TasksIT extends ESIntegTestCase {
         int maxSize = Math.toIntExact(SETTING_HTTP_MAX_HEADER_SIZE.getDefault(Settings.EMPTY).getBytes() / 2 + 1);
 
         Map<String, String> headers = new HashMap<>();
-        headers.put("X-Opaque-Id", "my_id");
+        headers.put(Task.X_OPAQUE_ID, "my_id");
         headers.put("Custom-Task-Header", randomAlphaOfLengthBetween(maxSize, maxSize + 100));
         IllegalArgumentException ex = expectThrows(
             IllegalArgumentException.class,
@@ -415,7 +415,7 @@ public class TasksIT extends ESIntegTestCase {
 
     private void assertTaskHeaders(TaskInfo taskInfo) {
         assertThat(taskInfo.getHeaders().keySet(), hasSize(2));
-        assertEquals("my_id", taskInfo.getHeaders().get("X-Opaque-Id"));
+        assertEquals("my_id", taskInfo.getHeaders().get(Task.X_OPAQUE_ID));
         assertEquals("my_value", taskInfo.getHeaders().get("Custom-Task-Header"));
     }
 
@@ -716,7 +716,7 @@ public class TasksIT extends ESIntegTestCase {
             .setTimeout(timeValueSeconds(10)).get();
 
         // It should finish quickly and without complaint and list the list tasks themselves
-        assertThat(response.getNodeFailures(), emptyCollectionOf(FailedNodeException.class));
+        assertThat(response.getNodeFailures(), emptyCollectionOf(ElasticsearchException.class));
         assertThat(response.getTaskFailures(), emptyCollectionOf(TaskOperationFailure.class));
         assertThat(response.getTasks().size(), greaterThanOrEqualTo(1));
     }

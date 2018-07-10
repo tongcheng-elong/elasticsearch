@@ -63,6 +63,7 @@ public final class SearchRequest extends ActionRequest implements IndicesRequest
     private static final ToXContent.Params FORMAT_PARAMS = new ToXContent.MapParams(Collections.singletonMap("pretty", "false"));
 
     public static final int DEFAULT_PRE_FILTER_SHARD_SIZE = 128;
+    public static final int DEFAULT_BATCHED_REDUCE_SIZE = 512;
 
     private SearchType searchType = SearchType.DEFAULT;
 
@@ -82,7 +83,7 @@ public final class SearchRequest extends ActionRequest implements IndicesRequest
     
     private Scroll scroll;
 
-    private int batchedReduceSize = 512;
+    private int batchedReduceSize = DEFAULT_BATCHED_REDUCE_SIZE;
 
     private int maxConcurrentShardRequests = 0;
 
@@ -208,7 +209,7 @@ public final class SearchRequest extends ActionRequest implements IndicesRequest
 
     /**
      * Sets the preference to execute the search. Defaults to randomize across shards. Can be set to
-     * <tt>_local</tt> to prefer local shards, <tt>_primary</tt> to execute only on primary shards, or
+     * {@code _local} to prefer local shards, {@code _primary} to execute only on primary shards, or
      * a custom value, which guarantees that the same order will be used across different requests.
      */
     public SearchRequest preference(String preference) {
@@ -346,7 +347,7 @@ public final class SearchRequest extends ActionRequest implements IndicesRequest
     /**
      * Returns the number of shard requests that should be executed concurrently. This value should be used as a protection mechanism to
      * reduce the number of shard reqeusts fired per high level search request. Searches that hit the entire cluster can be throttled
-     * with this number to reduce the cluster load. The default grows with the number of nodes in the cluster but is at most <tt>256</tt>.
+     * with this number to reduce the cluster load. The default grows with the number of nodes in the cluster but is at most {@code 256}.
      */
     public int getMaxConcurrentShardRequests() {
         return maxConcurrentShardRequests == 0 ? 256 : maxConcurrentShardRequests;
@@ -355,7 +356,7 @@ public final class SearchRequest extends ActionRequest implements IndicesRequest
     /**
      * Sets the number of shard requests that should be executed concurrently. This value should be used as a protection mechanism to
      * reduce the number of shard requests fired per high level search request. Searches that hit the entire cluster can be throttled
-     * with this number to reduce the cluster load. The default grows with the number of nodes in the cluster but is at most <tt>256</tt>.
+     * with this number to reduce the cluster load. The default grows with the number of nodes in the cluster but is at most {@code 256}.
      */
     public void setMaxConcurrentShardRequests(int maxConcurrentShardRequests) {
         if (maxConcurrentShardRequests < 1) {
@@ -367,7 +368,7 @@ public final class SearchRequest extends ActionRequest implements IndicesRequest
      * Sets a threshold that enforces a pre-filter roundtrip to pre-filter search shards based on query rewriting if the number of shards
      * the search request expands to exceeds the threshold. This filter roundtrip can limit the number of shards significantly if for
      * instance a shard can not match any documents based on it's rewrite method ie. if date filters are mandatory to match but the shard
-     * bounds and the query are disjoint. The default is <tt>128</tt>
+     * bounds and the query are disjoint. The default is {@code 128}
      */
     public void setPreFilterShardSize(int preFilterShardSize) {
         if (preFilterShardSize < 1) {
@@ -380,7 +381,7 @@ public final class SearchRequest extends ActionRequest implements IndicesRequest
      * Returns a threshold that enforces a pre-filter roundtrip to pre-filter search shards based on query rewriting if the number of shards
      * the search request expands to exceeds the threshold. This filter roundtrip can limit the number of shards significantly if for
      * instance a shard can not match any documents based on it's rewrite method ie. if date filters are mandatory to match but the shard
-     * bounds and the query are disjoint. The default is <tt>128</tt>
+     * bounds and the query are disjoint. The default is {@code 128}
      */
     public int getPreFilterShardSize() {
         return preFilterShardSize;

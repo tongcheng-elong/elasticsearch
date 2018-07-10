@@ -19,7 +19,6 @@
 
 package org.elasticsearch.repositories.gcs;
 
-import com.google.api.services.storage.Storage;
 import org.apache.logging.log4j.Logger;
 import org.elasticsearch.cluster.metadata.RepositoryMetaData;
 import org.elasticsearch.common.Strings;
@@ -108,33 +107,28 @@ class GoogleCloudStorageRepository extends BlobStoreRepository {
 
         logger.debug("using bucket [{}], base_path [{}], chunk_size [{}], compress [{}]", bucket, basePath, chunkSize, compress);
 
-        String application = APPLICATION_NAME.get(metadata.settings());
-        if (Strings.hasText(application)) {
+        final String applicationName = APPLICATION_NAME.get(metadata.settings());
+        if (Strings.hasText(applicationName)) {
             deprecationLogger.deprecated("Setting [application_name] in repository settings is deprecated, " +
                 "it must be specified in the client settings instead");
+            storageService.setOverrideApplicationName(applicationName);
         }
-        TimeValue connectTimeout = null;
-        TimeValue readTimeout = null;
 
-        TimeValue timeout = HTTP_CONNECT_TIMEOUT.get(metadata.settings());
-        if ((timeout != null) && (timeout.millis() != NO_TIMEOUT.millis())) {
+        final TimeValue connectTimeout = HTTP_CONNECT_TIMEOUT.get(metadata.settings());
+        if ((connectTimeout != null) && (connectTimeout.millis() != NO_TIMEOUT.millis())) {
             deprecationLogger.deprecated("Setting [http.connect_timeout] in repository settings is deprecated, " +
                 "it must be specified in the client settings instead");
-            connectTimeout = timeout;
+            storageService.setOverrideConnectTimeout(connectTimeout);
         }
-        timeout = HTTP_READ_TIMEOUT.get(metadata.settings());
-        if ((timeout != null) && (timeout.millis() != NO_TIMEOUT.millis())) {
+
+        final TimeValue readTimeout = HTTP_READ_TIMEOUT.get(metadata.settings());
+        if ((readTimeout != null) && (readTimeout.millis() != NO_TIMEOUT.millis())) {
             deprecationLogger.deprecated("Setting [http.read_timeout] in repository settings is deprecated, " +
                 "it must be specified in the client settings instead");
-            readTimeout = timeout;
+            storageService.setOverrideReadTimeout(readTimeout);
         }
 
-        TimeValue finalConnectTimeout = connectTimeout;
-        TimeValue finalReadTimeout = readTimeout;
-
-        Storage client = SocketAccess.doPrivilegedIOException(() ->
-            storageService.createClient(clientName, application, finalConnectTimeout, finalReadTimeout));
-        this.blobStore = new GoogleCloudStorageBlobStore(settings, bucket, client);
+        this.blobStore = new GoogleCloudStorageBlobStore(settings, bucket, clientName, storageService);
     }
 
     @Override

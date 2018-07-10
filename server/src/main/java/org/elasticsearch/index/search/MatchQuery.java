@@ -20,8 +20,8 @@
 package org.elasticsearch.index.search;
 
 import org.apache.lucene.analysis.Analyzer;
-import org.apache.lucene.analysis.miscellaneous.DisableGraphAttribute;
 import org.apache.lucene.analysis.TokenStream;
+import org.apache.lucene.analysis.miscellaneous.DisableGraphAttribute;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.Term;
 import org.apache.lucene.queries.ExtendedCommonTermsQuery;
@@ -29,7 +29,6 @@ import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanClause.Occur;
 import org.apache.lucene.search.BooleanQuery;
 import org.apache.lucene.search.BoostQuery;
-import org.apache.lucene.search.DisjunctionMaxQuery;
 import org.apache.lucene.search.FuzzyQuery;
 import org.apache.lucene.search.MultiPhraseQuery;
 import org.apache.lucene.search.MultiTermQuery;
@@ -49,11 +48,13 @@ import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.common.io.stream.Writeable;
+import org.elasticsearch.common.logging.DeprecationLogger;
+import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.lucene.all.AllTermQuery;
 import org.elasticsearch.common.lucene.search.MultiPhrasePrefixQuery;
 import org.elasticsearch.common.lucene.search.Queries;
 import org.elasticsearch.common.unit.Fuzziness;
-import org.elasticsearch.index.analysis.ShingleTokenFilterFactory;
+import org.elasticsearch.index.mapper.KeywordFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.query.QueryShardContext;
 import org.elasticsearch.index.query.support.QueryParsers;
@@ -63,7 +64,9 @@ import java.io.IOException;
 import static org.elasticsearch.common.lucene.search.Queries.newLenientFieldQuery;
 import static org.elasticsearch.common.lucene.search.Queries.newUnmappedFieldQuery;
 
-public class MatchQuery {
+public class    MatchQuery {
+
+    private static final DeprecationLogger DEPRECATION_LOGGER = new DeprecationLogger(Loggers.getLogger(MappedFieldType.class));
 
     public enum Type implements Writeable {
         /**
@@ -264,7 +267,8 @@ public class MatchQuery {
          * passing through QueryBuilder.
          */
         boolean noForcedAnalyzer = this.analyzer == null;
-        if (fieldType.tokenized() == false && noForcedAnalyzer) {
+        if (fieldType.tokenized() == false && noForcedAnalyzer &&
+            fieldType instanceof KeywordFieldMapper.KeywordFieldType == false) {
             return blendTermQuery(new Term(fieldName, value.toString()), fieldType);
         }
 
@@ -352,21 +356,53 @@ public class MatchQuery {
 
         @Override
         protected Query analyzePhrase(String field, TokenStream stream, int slop) throws IOException {
-            if (hasPositions(mapper) == false) {
-                IllegalStateException exc =
-                    new IllegalStateException("field:[" + field + "] was indexed without position data; cannot run PhraseQuery");
-                if (lenient) {
-                    return newLenientFieldQuery(field, exc);
-                } else {
-                    throw exc;
+            try {
+                checkForPositions(field);
+                Query query = mapper.phraseQuery(field, stream, slop, enablePositionIncrements);
+                if (query instanceof PhraseQuery) {
+                    // synonyms that expand to multiple terms can return a phrase query.
+                    return blendPhraseQuery((PhraseQuery) query, mapper);
                 }
+                return query;
             }
-            Query query = super.analyzePhrase(field, stream, slop);
-            if (query instanceof PhraseQuery) {
-                // synonyms that expand to multiple terms can return a phrase query.
-                return blendPhraseQuery((PhraseQuery) query, mapper);
+            catch (IllegalStateException e) {
+                if (lenient) {
+                    return newLenientFieldQuery(field, e);
+                }
+                throw e;
             }
-            return query;
+            catch (IllegalArgumentException e) {
+                if (lenient == false) {
+                    DEPRECATION_LOGGER.deprecated(e.getMessage());
+                }
+                return newLenientFieldQuery(field, e);
+            }
+        }
+
+        @Override
+        protected Query analyzeMultiPhrase(String field, TokenStream stream, int slop) throws IOException {
+            try {
+                checkForPositions(field);
+                return mapper.multiPhraseQuery(field, stream, slop, enablePositionIncrements);
+            }
+            catch (IllegalStateException e) {
+                if (lenient) {
+                    return newLenientFieldQuery(field, e);
+                }
+                throw e;
+            }
+            catch (IllegalArgumentException e) {
+                if (lenient == false) {
+                    DEPRECATION_LOGGER.deprecated(e.getMessage());
+                }
+                return newLenientFieldQuery(field, e);
+            }
+        }
+
+        private void checkForPositions(String field) {
+            if (hasPositions(mapper) == false) {
+                throw new IllegalStateException("field:[" + field + "] was indexed without position data; cannot run PhraseQuery");
+            }
         }
 
         /**
@@ -381,9 +417,9 @@ public class MatchQuery {
             // query based on the analysis chain.
             try (TokenStream source = analyzer.tokenStream(field, queryText)) {
                 if (source.hasAttribute(DisableGraphAttribute.class)) {
-                    /**
-                     * A {@link TokenFilter} in this {@link TokenStream} disabled the graph analysis to avoid
-                     * paths explosion. See {@link ShingleTokenFilterFactory} for details.
+                    /*
+                      A {@link TokenFilter} in this {@link TokenStream} disabled the graph analysis to avoid
+                      paths explosion. See {@link org.elasticsearch.index.analysis.ShingleTokenFilterFactory} for details.
                      */
                     setEnableGraphQueries(false);
                 }
@@ -448,9 +484,9 @@ public class MatchQuery {
             } else if (query instanceof SpanNearQuery) {
                 SpanNearQuery spanNearQuery = (SpanNearQuery) query;
                 SpanQuery[] clauses = spanNearQuery.getClauses();
-                if (clauses[clauses.length-1] instanceof SpanTermQuery) {
-                    clauses[clauses.length-1] = new SpanMultiTermQueryWrapper<>(
-                        new PrefixQuery(((SpanTermQuery) clauses[clauses.length-1]).getTerm())
+                if (clauses[clauses.length - 1] instanceof SpanTermQuery) {
+                    clauses[clauses.length - 1] = new SpanMultiTermQueryWrapper<>(
+                        new PrefixQuery(((SpanTermQuery) clauses[clauses.length - 1]).getTerm())
                     );
                 }
                 SpanNearQuery newQuery = new SpanNearQuery(clauses, spanNearQuery.getSlop(), spanNearQuery.isInOrder());

@@ -20,7 +20,6 @@
 package org.elasticsearch.ingest.common;
 
 import org.elasticsearch.ElasticsearchException;
-import org.elasticsearch.common.xcontent.XContentParseException;
 import org.elasticsearch.script.Script;
 import org.elasticsearch.script.ScriptException;
 import org.elasticsearch.script.ScriptService;
@@ -82,7 +81,7 @@ public class ScriptProcessorFactoryTests extends ESTestCase {
         configMap.put("source", "bar");
         configMap.put("lang", "mockscript");
 
-        XContentParseException exception = expectThrows(XContentParseException.class,
+        Exception exception = expectThrows(Exception.class,
             () -> factory.create(null, randomAlphaOfLength(10), configMap));
         assertThat(exception.getMessage(), containsString("Only one of [id] or [source] may be configured"));
     }

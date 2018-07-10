@@ -30,7 +30,6 @@ import org.apache.lucene.spatial.prefix.tree.GeohashPrefixTree;
 import org.apache.lucene.spatial.prefix.tree.PackedQuadPrefixTree;
 import org.apache.lucene.spatial.prefix.tree.QuadPrefixTree;
 import org.apache.lucene.spatial.prefix.tree.SpatialPrefixTree;
-import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.Version;
 import org.elasticsearch.common.Explicit;
 import org.elasticsearch.common.geo.GeoUtils;
@@ -199,6 +198,7 @@ public class GeoShapeFieldMapper extends FieldMapper {
         @Override
         public Mapper.Builder parse(String name, Map<String, Object> node, ParserContext parserContext) throws MapperParsingException {
             Builder builder = new Builder(name);
+            Boolean pointsOnly = null;
             for (Iterator<Map.Entry<String, Object>> iterator = node.entrySet().iterator(); iterator.hasNext();) {
                 Map.Entry<String, Object> entry = iterator.next();
                 String fieldName = entry.getKey();
@@ -231,11 +231,16 @@ public class GeoShapeFieldMapper extends FieldMapper {
                     builder.ignoreZValue(TypeParsers.nodeBooleanValue(fieldName, GeoPointFieldMapper.Names.IGNORE_Z_VALUE.getPreferredName(),
                         fieldNode, parserContext));
                     iterator.remove();
-                } else if (Names.STRATEGY_POINTS_ONLY.equals(fieldName)
-                    && builder.fieldType().strategyName.equals(SpatialStrategy.TERM.getStrategyName()) == false) {
-                    boolean pointsOnly = TypeParsers.nodeBooleanValue(fieldName, Names.STRATEGY_POINTS_ONLY, fieldNode, parserContext);
-                    builder.fieldType().setPointsOnly(pointsOnly);
+                } else if (Names.STRATEGY_POINTS_ONLY.equals(fieldName)) {
+                    pointsOnly = TypeParsers.nodeBooleanValue(fieldName, Names.STRATEGY_POINTS_ONLY, fieldNode, parserContext);
                     iterator.remove();
+                }
+            }
+            if (pointsOnly != null) {
+                if (builder.fieldType().strategyName.equals(SpatialStrategy.TERM.getStrategyName()) && pointsOnly == false) {
+                    throw new IllegalArgumentException("points_only cannot be set to false for term strategy");
+                } else {
+                    builder.fieldType().setPointsOnly(pointsOnly);
                 }
             }
             return builder;
@@ -516,6 +521,7 @@ public class GeoShapeFieldMapper extends FieldMapper {
             if (ignoreMalformed.value() == false) {
                 throw new MapperParsingException("failed to parse [" + fieldType().name() + "]", e);
             }
+            context.addIgnoredField(fieldType.name());
         }
         return null;
     }
@@ -555,13 +561,26 @@ public class GeoShapeFieldMapper extends FieldMapper {
         if (includeDefaults || fieldType().tree().equals(Defaults.TREE) == false) {
             builder.field(Names.TREE, fieldType().tree());
         }
-        if (includeDefaults || fieldType().treeLevels() != 0) {
+
+        if (fieldType().treeLevels() != 0) {
             builder.field(Names.TREE_LEVELS, fieldType().treeLevels());
+        } else if(includeDefaults && fieldType().precisionInMeters() == -1) { // defaults only make sense if precision is not specified
+            if ("geohash".equals(fieldType().tree())) {
+                builder.field(Names.TREE_LEVELS, Defaults.GEOHASH_LEVELS);
+            } else if ("legacyquadtree".equals(fieldType().tree())) {
+                builder.field(Names.TREE_LEVELS, Defaults.QUADTREE_LEVELS);
+            } else if ("quadtree".equals(fieldType().tree())) {
+                builder.field(Names.TREE_LEVELS, Defaults.QUADTREE_LEVELS);
+            } else {
+                throw new IllegalArgumentException("Unknown prefix tree type [" + fieldType().tree() + "]");
+            }
         }
-        if (includeDefaults || fieldType().precisionInMeters() != -1) {
+        if (fieldType().precisionInMeters() != -1) {
             builder.field(Names.TREE_PRESISION, DistanceUnit.METERS.toString(fieldType().precisionInMeters()));
+        } else if (includeDefaults && fieldType().treeLevels() == 0) { // defaults only make sense if tree levels are not specified
+            builder.field(Names.TREE_PRESISION, DistanceUnit.METERS.toString(50));
         }
-        if (includeDefaults || fieldType().strategyName() != Defaults.STRATEGY) {
+        if (includeDefaults || fieldType().strategyName().equals(Defaults.STRATEGY) == false) {
             builder.field(Names.STRATEGY, fieldType().strategyName());
         }
         if (includeDefaults || fieldType().distanceErrorPct() != fieldType().defaultDistanceErrorPct) {
@@ -570,8 +589,15 @@ public class GeoShapeFieldMapper extends FieldMapper {
         if (includeDefaults || fieldType().orientation() != Defaults.ORIENTATION) {
             builder.field(Names.ORIENTATION, fieldType().orientation());
         }
-        if (includeDefaults || fieldType().pointsOnly() != GeoShapeFieldMapper.Defaults.POINTS_ONLY) {
-            builder.field(Names.STRATEGY_POINTS_ONLY, fieldType().pointsOnly());
+        if (fieldType().strategyName().equals(SpatialStrategy.TERM.getStrategyName())) {
+            // For TERMs strategy the defaults for points only change to true
+            if (includeDefaults || fieldType().pointsOnly() != true) {
+                builder.field(Names.STRATEGY_POINTS_ONLY, fieldType().pointsOnly());
+            }
+        } else {
+            if (includeDefaults || fieldType().pointsOnly() != GeoShapeFieldMapper.Defaults.POINTS_ONLY) {
+                builder.field(Names.STRATEGY_POINTS_ONLY, fieldType().pointsOnly());
+            }
         }
         if (includeDefaults || coerce.explicit()) {
             builder.field(Names.COERCE, coerce.value());

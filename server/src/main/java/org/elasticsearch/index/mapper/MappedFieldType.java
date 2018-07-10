@@ -19,6 +19,7 @@
 
 package org.elasticsearch.index.mapper;
 
+import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.document.FieldType;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexReader;
@@ -164,7 +165,7 @@ public abstract class MappedFieldType extends FieldType {
         boolean indexed =  indexOptions() != IndexOptions.NONE;
         boolean mergeWithIndexed = other.indexOptions() != IndexOptions.NONE;
         // TODO: should be validating if index options go "up" (but "down" is ok)
-        if (indexed != mergeWithIndexed || tokenized() != other.tokenized()) {
+        if (indexed != mergeWithIndexed) {
             conflicts.add("mapper [" + name() + "] has different [index] values");
         }
         if (stored() != other.stored()) {
@@ -382,6 +383,14 @@ public abstract class MappedFieldType extends FieldType {
 
     public abstract Query existsQuery(QueryShardContext context);
 
+    public Query phraseQuery(String field, TokenStream stream, int slop, boolean enablePositionIncrements) throws IOException {
+        throw new IllegalArgumentException("Attempted to build a phrase query with multiple terms against non-text field [" + name + "]");
+    }
+
+    public Query multiPhraseQuery(String field, TokenStream stream, int slop, boolean enablePositionIncrements) throws IOException {
+        throw new IllegalArgumentException("Attempted to build a phrase query with multiple terms against non-text field [" + name + "]");
+    }
+
     /**
      * An enum used to describe the relation between the range of terms in a
      * shard when compared with a query range
@@ -404,7 +413,7 @@ public abstract class MappedFieldType extends FieldType {
         return Relation.INTERSECTS;
     }
 
-    /** A term query to use when parsing a query string. Can return <tt>null</tt>. */
+    /** A term query to use when parsing a query string. Can return {@code null}. */
     @Nullable
     public Query queryStringTermQuery(Term term) {
         return null;

@@ -12,6 +12,7 @@ import org.elasticsearch.action.ActionRequestValidationException;
 import org.elasticsearch.action.support.master.AcknowledgedResponse;
 import org.elasticsearch.action.support.master.MasterNodeRequest;
 import org.elasticsearch.client.ElasticsearchClient;
+import org.elasticsearch.cluster.metadata.MetaData;
 import org.elasticsearch.common.ParseField;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.io.stream.StreamInput;
@@ -137,7 +138,7 @@ public class OpenJobAction extends Action<OpenJobAction.Request, AcknowledgedRes
         public static final ParseField IGNORE_DOWNTIME = new ParseField("ignore_downtime");
 
         public static final ParseField TIMEOUT = new ParseField("timeout");
-        public static ObjectParser<JobParams, Void> PARSER = new ObjectParser<>(TASK_NAME, JobParams::new);
+        public static ObjectParser<JobParams, Void> PARSER = new ObjectParser<>(TASK_NAME, true, JobParams::new);
 
         static {
             PARSER.declareString(JobParams::setJobId, Job.ID);
@@ -258,8 +259,14 @@ public class OpenJobAction extends Action<OpenJobAction.Request, AcknowledgedRes
     public interface JobTaskMatcher {
 
         static boolean match(Task task, String expectedJobId) {
-            String expectedDescription = "job-" + expectedJobId;
-            return task instanceof JobTaskMatcher && expectedDescription.equals(task.getDescription());
+            if (task instanceof JobTaskMatcher) {
+                if (MetaData.ALL.equals(expectedJobId)) {
+                    return true;
+                }
+                String expectedDescription = "job-" + expectedJobId;
+                return expectedDescription.equals(task.getDescription());
+            }
+            return false;
         }
     }
 

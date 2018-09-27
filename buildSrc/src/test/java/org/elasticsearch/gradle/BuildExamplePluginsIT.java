@@ -117,7 +117,7 @@ public class BuildExamplePluginsIT extends GradleIntegrationTestCase {
         // Add a repositories section to be able to resolve dependencies
         String luceneSnapshotRepo = "";
         String luceneSnapshotRevision = System.getProperty("test.lucene-snapshot-revision");
-        if (luceneSnapshotRepo != null) {
+        if (luceneSnapshotRevision != null) {
             luceneSnapshotRepo =  "  maven {\n" +
                 "    url \"http://s3.amazonaws.com/download.elasticsearch.org/lucenesnapshots/" + luceneSnapshotRevision + "\"\n" +
                 "  }\n";
@@ -151,14 +151,6 @@ public class BuildExamplePluginsIT extends GradleIntegrationTestCase {
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
-    }
-
-    private String getLocalTestRepoPath() {
-        String property = System.getProperty("test.local-test-repo-path");
-        Objects.requireNonNull(property, "test.local-test-repo-path not passed to tests");
-        File file = new File(property);
-        assertTrue("Expected " + property + " to exist, but it did not!", file.exists());
-        return file.getAbsolutePath();
     }
 
 }

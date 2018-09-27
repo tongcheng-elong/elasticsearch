@@ -11,7 +11,7 @@ import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.common.collect.Tuple;
 import org.elasticsearch.xpack.core.security.authc.AuthenticationResult;
 import org.elasticsearch.xpack.core.security.authc.kerberos.KerberosRealmSettings;
-import org.elasticsearch.protocol.xpack.security.User;
+import org.elasticsearch.xpack.core.security.user.User;
 import org.elasticsearch.xpack.security.authc.support.UserRoleMapper.UserData;
 import org.ietf.jgss.GSSException;
 
@@ -102,8 +102,8 @@ public class KerberosRealmCacheTests extends KerberosRealmTestCase {
     public void testAuthenticateWithValidTicketSucessAuthnWithUserDetailsWhenCacheDisabled()
             throws LoginException, GSSException, IOException {
         // if cache.ttl <= 0 then the cache is disabled
-        settings = KerberosTestCase.buildKerberosRealmSettings(
-                KerberosTestCase.writeKeyTab(dir.resolve("key.keytab"), randomAlphaOfLength(4)).toString(), 100, "0m", true,
+        settings = buildKerberosRealmSettings(
+                writeKeyTab(dir.resolve("key.keytab"), randomAlphaOfLength(4)).toString(), 100, "0m", true,
                 randomBoolean());
         final String username = randomPrincipalName();
         final String outToken = randomAlphaOfLength(10);

@@ -22,6 +22,7 @@ import org.apache.lucene.index.IndexOptions;
 import org.elasticsearch.Version;
 import org.elasticsearch.action.admin.indices.mapping.get.GetMappingsResponse;
 import org.elasticsearch.cluster.metadata.IndexMetaData;
+import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.compress.CompressedXContent;
@@ -33,6 +34,7 @@ import org.elasticsearch.common.xcontent.XContentParser;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.common.xcontent.json.JsonXContent;
 import org.elasticsearch.index.IndexService;
+import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.mapper.BooleanFieldMapper.BooleanFieldType;
 import org.elasticsearch.index.mapper.DateFieldMapper.DateFieldType;
 import org.elasticsearch.index.mapper.NumberFieldMapper.NumberFieldType;
@@ -188,19 +190,27 @@ public class DynamicMappingTests extends ESSingleNodeTestCase {
         assertNotNull(fieldType);
     }
 
-    public void testTypeNotCreatedOnIndexFailure() throws IOException, InterruptedException {
-        XContentBuilder mapping = jsonBuilder().startObject().startObject("_default_")
-                .field("dynamic", "strict")
-                .endObject().endObject();
-        createIndex("test", Settings.EMPTY, "_default_", mapping);
-        try {
-            client().prepareIndex().setIndex("test").setType("type").setSource(jsonBuilder().startObject().field("test", "test").endObject()).get();
-            fail();
-        } catch (StrictDynamicMappingException e) {
-
+    public void testTypeNotCreatedOnIndexFailure() throws IOException {
+        try (XContentBuilder mapping = jsonBuilder()) {
+            mapping.startObject();
+            {
+                mapping.startObject("_default_");
+                {
+                    mapping.field("dynamic", "strict");
+                }
+                mapping.endObject();
+            }
+            mapping.endObject();
+            createIndex("test", Settings.EMPTY, "_default_", mapping);
         }
 
-        GetMappingsResponse getMappingsResponse = client().admin().indices().prepareGetMappings("test").get();
+        try (XContentBuilder source = jsonBuilder().startObject().field("test", "test").endObject()) {
+            expectThrows(
+                    StrictDynamicMappingException.class,
+                    () -> client().prepareIndex().setIndex("test").setType("type").setSource(source).get());
+        }
+
+        final GetMappingsResponse getMappingsResponse = client().admin().indices().prepareGetMappings("test").get();
         assertNull(getMappingsResponse.getMappings().get("test").get("type"));
     }
 
@@ -211,7 +221,10 @@ public class DynamicMappingTests extends ESSingleNodeTestCase {
     }
 
     private Mapper parse(DocumentMapper mapper, DocumentMapperParser parser, XContentBuilder builder) throws Exception {
-        Settings settings = Settings.builder().put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT).build();
+        IndexMetaData build = IndexMetaData.builder("")
+            .settings(Settings.builder().put(IndexMetaData.SETTING_VERSION_CREATED, Version.CURRENT))
+            .numberOfShards(1).numberOfReplicas(0).build();
+        IndexSettings settings = new IndexSettings(build, Settings.EMPTY);
         SourceToParse source = SourceToParse.source("test", mapper.type(), "some_id", BytesReference.bytes(builder), builder.contentType());
         try (XContentParser xContentParser = createParser(JsonXContent.jsonXContent, source.source())) {
             ParseContext.InternalParseContext ctx = new ParseContext.InternalParseContext(settings, parser, mapper, source, xContentParser);
@@ -571,54 +584,6 @@ public class DynamicMappingTests extends ESSingleNodeTestCase {
         assertNull(parsed.dynamicMappingsUpdate());
     }
 
-    public void testMixTemplateMultiFieldMultiTypeAndMappingReuse() throws Exception {
-        IndexService indexService = createIndex("test", Settings.builder().put("index.version.created", Version.V_5_6_0).build());
-        XContentBuilder mappings1 = jsonBuilder().startObject()
-            .startObject("type1")
-            .startArray("dynamic_templates")
-            .startObject()
-            .startObject("template1")
-            .field("match_mapping_type", "string")
-            .startObject("mapping")
-            .field("type", "text")
-            .startObject("fields")
-            .startObject("raw")
-            .field("type", "keyword")
-            .endObject()
-            .endObject()
-            .endObject()
-            .endObject()
-            .endObject()
-            .endArray()
-            .endObject().endObject();
-        indexService.mapperService().merge("type1", new CompressedXContent(BytesReference.bytes(mappings1)),
-                MapperService.MergeReason.MAPPING_UPDATE, false);
-        XContentBuilder mappings2 = jsonBuilder().startObject()
-            .startObject("type2")
-            .startObject("properties")
-            .startObject("field")
-            .field("type", "text")
-            .endObject()
-            .endObject()
-            .endObject().endObject();
-        indexService.mapperService().merge("type2", new CompressedXContent(BytesReference.bytes(mappings2)), MapperService.MergeReason.MAPPING_UPDATE, false);
-
-        XContentBuilder json = XContentFactory.jsonBuilder().startObject()
-            .field("field", "foo")
-            .endObject();
-        SourceToParse source = SourceToParse.source("test", "type1", "1", BytesReference.bytes(json), json.contentType());
-        DocumentMapper mapper = indexService.mapperService().documentMapper("type1");
-        assertNull(mapper.mappers().getMapper("field.raw"));
-        ParsedDocument parsed = mapper.parse(source);
-        assertNotNull(parsed.dynamicMappingsUpdate());
-
-        indexService.mapperService().merge("type1", new CompressedXContent(parsed.dynamicMappingsUpdate().toString()), MapperService.MergeReason.MAPPING_UPDATE, false);
-        mapper = indexService.mapperService().documentMapper("type1");
-        assertNotNull(mapper.mappers().getMapper("field.raw"));
-        parsed = mapper.parse(source);
-        assertNull(parsed.dynamicMappingsUpdate());
-    }
-
     public void testDefaultFloatingPointMappings() throws IOException {
         MapperService mapperService = createIndex("test").mapperService();
         String mapping = Strings.toString(jsonBuilder().startObject()
@@ -786,4 +751,13 @@ public class DynamicMappingTests extends ESSingleNodeTestCase {
         client().prepareIndex("test", "type", "1").setSource("foo", "abc").get();
         assertThat(index.mapperService().fullName("foo"), instanceOf(KeywordFieldMapper.KeywordFieldType.class));
     }
+
+    public void testMappingVersionAfterDynamicMappingUpdate() {
+        createIndex("test", client().admin().indices().prepareCreate("test").addMapping("type"));
+        final ClusterService clusterService = getInstanceFromNode(ClusterService.class);
+        final long previousVersion = clusterService.state().metaData().index("test").getMappingVersion();
+        client().prepareIndex("test", "type", "1").setSource("field", "text").get();
+        assertThat(clusterService.state().metaData().index("test").getMappingVersion(), equalTo(1 + previousVersion));
+    }
+
 }

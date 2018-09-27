@@ -28,6 +28,7 @@ import org.elasticsearch.client.Client;
 import org.elasticsearch.client.transport.TransportClient;
 import org.elasticsearch.cluster.ClusterName;
 import org.elasticsearch.cluster.node.DiscoveryNode;
+import org.elasticsearch.common.CheckedBiConsumer;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.component.AbstractLifecycleComponent;
@@ -56,6 +57,7 @@ import org.elasticsearch.tasks.TaskManager;
 import org.elasticsearch.threadpool.ThreadPool;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.UnknownHostException;
 import java.util.Arrays;
 import java.util.Collections;
@@ -77,7 +79,7 @@ import static org.elasticsearch.common.settings.Setting.intSetting;
 import static org.elasticsearch.common.settings.Setting.listSetting;
 import static org.elasticsearch.common.settings.Setting.timeSetting;
 
-public class TransportService extends AbstractLifecycleComponent implements TransportConnectionListener {
+public class TransportService extends AbstractLifecycleComponent implements TransportMessageListener, TransportConnectionListener {
 
     public static final Setting<Integer> CONNECTIONS_PER_NODE_RECOVERY =
         intSetting("transport.connections_per_node.recovery", 2, 1, Setting.Property.NodeScope);
@@ -248,7 +250,8 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
 
     @Override
     protected void doStart() {
-        transport.addConnectionListener(this);
+        transport.addMessageListener(this);
+        connectionManager.addListener(this);
         transport.start();
         if (transport.boundAddress() != null && logger.isInfoEnabled()) {
             logger.info("{}", transport.boundAddress());
@@ -266,8 +269,9 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
     @Override
     protected void doStop() {
         try {
-            connectionManager.close();
-            transport.stop();
+            IOUtils.close(connectionManager, remoteClusterService, transport::stop);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         } finally {
             // in case the transport is not connected to our local node (thus cleaned on node disconnect)
             // make sure to clean any leftover on going handles
@@ -304,7 +308,7 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
 
     @Override
     protected void doClose() throws IOException {
-        IOUtils.close(remoteClusterService, transport);
+        transport.close();
     }
 
     /**
@@ -362,14 +366,18 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
         if (isLocalNode(node)) {
             return;
         }
+        connectionManager.connectToNode(node, connectionProfile, connectionValidator(node));
+    }
 
-        connectionManager.connectToNode(node, connectionProfile, (newConnection, actualProfile) -> {
+    public CheckedBiConsumer<Transport.Connection, ConnectionProfile, IOException> connectionValidator(DiscoveryNode node) {
+        return (newConnection, actualProfile) -> {
             // We don't validate cluster names to allow for CCS connections.
             final DiscoveryNode remote = handshake(newConnection, actualProfile.getHandshakeTimeout().millis(), cn -> true).discoveryNode;
             if (validateConnections && node.equals(remote) == false) {
                 throw new ConnectTransportException(node, "handshake failed. unexpected remote node " + remote);
             }
-        });
+        };
+
     }
 
     /**
@@ -505,12 +513,10 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
     }
 
     public void addConnectionListener(TransportConnectionListener listener) {
-        transport.addConnectionListener(listener);
         connectionManager.addListener(listener);
     }
 
     public void removeConnectionListener(TransportConnectionListener listener) {
-        transport.removeConnectionListener(listener);
         connectionManager.removeListener(listener);
     }
 
@@ -562,8 +568,12 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
                                                                 final TransportRequest request,
                                                                 final TransportRequestOptions options,
                                                                 TransportResponseHandler<T> handler) {
-
-        asyncSender.sendRequest(connection, action, request, options, handler);
+        try {
+            asyncSender.sendRequest(connection, action, request, options, handler);
+        } catch (NodeNotConnectedException ex) {
+            // the caller might not handle this so we invoke the handler
+            handler.handleException(ex);
+        }
     }
 
     /**
@@ -721,6 +731,11 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
                             logger.warn(() -> new ParameterizedMessage(
                                     "failed to notify channel of error message for action [{}]", action), inner);
                         }
+                    }
+
+                    @Override
+                    public String toString() {
+                        return "processing of [" + requestId + "][" + action + "]: " + request;
                     }
                 });
             }
@@ -935,7 +950,7 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
         assert responseHandlers.contains(requestId) == false;
         TimeoutInfoHolder timeoutInfoHolder = timeoutInfoHandlers.remove(requestId);
         if (timeoutInfoHolder != null) {
-            long time = System.currentTimeMillis();
+            long time = threadPool.relativeTimeInMillis();
             logger.warn("Received response for a request that has timed out, sent [{}ms] ago, timed out [{}ms] ago, " +
                     "action [{}], node [{}], id [{}]", time - timeoutInfoHolder.sentTime(), time - timeoutInfoHolder.timeoutTime(),
                 timeoutInfoHolder.action(), timeoutInfoHolder.node(), requestId);
@@ -998,7 +1013,7 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
     final class TimeoutHandler implements Runnable {
 
         private final long requestId;
-        private final long sentTime = System.currentTimeMillis();
+        private final long sentTime = threadPool.relativeTimeInMillis();
         private final String action;
         private final DiscoveryNode node;
         volatile ScheduledFuture future;
@@ -1012,7 +1027,7 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
         @Override
         public void run() {
             if (responseHandlers.contains(requestId)) {
-                long timeoutTime = System.currentTimeMillis();
+                long timeoutTime = threadPool.relativeTimeInMillis();
                 timeoutInfoHandlers.put(requestId, new TimeoutInfoHolder(node, action, sentTime, timeoutTime));
                 // now that we have the information visible via timeoutInfoHandlers, we try to remove the request id
                 final Transport.ResponseContext holder = responseHandlers.remove(requestId);
@@ -1037,6 +1052,11 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
             assert responseHandlers.contains(requestId) == false :
                 "cancel must be called after the requestId [" + requestId + "] has been removed from clientHandlers";
             FutureUtils.cancel(future);
+        }
+
+        @Override
+        public String toString() {
+            return "timeout handler for [" + requestId + "][" + action + "]";
         }
     }
 
@@ -1165,7 +1185,17 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
                 if (ThreadPool.Names.SAME.equals(executor)) {
                     processResponse(handler, response);
                 } else {
-                    threadPool.executor(executor).execute(() -> processResponse(handler, response));
+                    threadPool.executor(executor).execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            processResponse(handler, response);
+                        }
+
+                        @Override
+                        public String toString() {
+                            return "delivery of response to [" + requestId + "][" + action + "]: " + response;
+                        }
+                    });
                 }
             }
         }
@@ -1190,7 +1220,17 @@ public class TransportService extends AbstractLifecycleComponent implements Tran
                 if (ThreadPool.Names.SAME.equals(executor)) {
                     processException(handler, rtx);
                 } else {
-                    threadPool.executor(handler.executor()).execute(() -> processException(handler, rtx));
+                    threadPool.executor(handler.executor()).execute(new Runnable() {
+                        @Override
+                        public void run() {
+                            processException(handler, rtx);
+                        }
+
+                        @Override
+                        public String toString() {
+                            return "delivery of failure response to [" + requestId + "][" + action + "]: " + exception;
+                        }
+                    });
                 }
             }
         }

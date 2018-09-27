@@ -50,6 +50,7 @@ import org.elasticsearch.node.Node;
 import org.elasticsearch.test.ESTestCase;
 import org.elasticsearch.test.VersionUtils;
 import org.elasticsearch.test.transport.MockTransportService;
+import org.elasticsearch.test.transport.StubbableTransport;
 import org.elasticsearch.threadpool.TestThreadPool;
 import org.elasticsearch.threadpool.ThreadPool;
 import org.junit.After;
@@ -169,7 +170,7 @@ public abstract class AbstractSimpleTransportTestCase extends ESTestCase {
         return service;
     }
 
-    private MockTransportService buildService(final String name, final Version version, ClusterSettings clusterSettings) {
+    protected MockTransportService buildService(final String name, final Version version, ClusterSettings clusterSettings) {
         return buildService(name, version, clusterSettings, Settings.EMPTY, true, true);
     }
 
@@ -763,6 +764,7 @@ public abstract class AbstractSimpleTransportTestCase extends ESTestCase {
 
     public void testNotifyOnShutdown() throws Exception {
         final CountDownLatch latch2 = new CountDownLatch(1);
+        final CountDownLatch latch3 = new CountDownLatch(1);
         try {
             serviceA.registerRequestHandler("internal:foobar", StringMessageRequest::new, ThreadPool.Names.GENERIC,
                 (request, channel) -> {
@@ -772,6 +774,8 @@ public abstract class AbstractSimpleTransportTestCase extends ESTestCase {
                         serviceB.stop();
                     } catch (Exception e) {
                         fail(e.getMessage());
+                    } finally {
+                        latch3.countDown();
                     }
                 });
             TransportFuture<TransportResponse.Empty> foobar = serviceB.submitRequest(nodeA, "internal:foobar",
@@ -783,6 +787,7 @@ public abstract class AbstractSimpleTransportTestCase extends ESTestCase {
             } catch (TransportException ex) {
 
             }
+            latch3.await();
         } finally {
             serviceB.close(); // make sure we are fully closed here otherwise we might run into assertions down the road
             serviceA.disconnectFromNode(nodeB);
@@ -1932,16 +1937,12 @@ public abstract class AbstractSimpleTransportTestCase extends ESTestCase {
 
     public void testHandshakeWithIncompatVersion() {
         assumeTrue("only tcp transport has a handshake method", serviceA.getOriginalTransport() instanceof TcpTransport);
-        NamedWriteableRegistry namedWriteableRegistry = new NamedWriteableRegistry(Collections.emptyList());
         Version version = Version.fromString("2.0.0");
-        try (MockTcpTransport transport = new MockTcpTransport(Settings.EMPTY, threadPool, BigArrays.NON_RECYCLING_INSTANCE,
-            new NoneCircuitBreakerService(), namedWriteableRegistry, new NetworkService(Collections.emptyList()), version);
-             MockTransportService service = MockTransportService.createNewService(Settings.EMPTY, transport, version, threadPool, null,
-                 Collections.emptySet())) {
+        try (MockTransportService service = build(Settings.EMPTY, version, null, true)) {
             service.start();
             service.acceptIncomingRequests();
-            DiscoveryNode node =
-                new DiscoveryNode("TS_TPC", "TS_TPC", transport.boundAddress().publishAddress(), emptyMap(), emptySet(), version0);
+            TransportAddress address = service.boundAddress().publishAddress();
+            DiscoveryNode node = new DiscoveryNode("TS_TPC", "TS_TPC", address, emptyMap(), emptySet(), version0);
             ConnectionProfile.Builder builder = new ConnectionProfile.Builder();
             builder.addConnections(1,
                 TransportRequestOptions.Type.BULK,
@@ -1957,15 +1958,11 @@ public abstract class AbstractSimpleTransportTestCase extends ESTestCase {
         assumeTrue("only tcp transport has a handshake method", serviceA.getOriginalTransport() instanceof TcpTransport);
         NamedWriteableRegistry namedWriteableRegistry = new NamedWriteableRegistry(Collections.emptyList());
         Version version = VersionUtils.randomVersionBetween(random(), Version.CURRENT.minimumCompatibilityVersion(), Version.CURRENT);
-        try (MockTcpTransport transport = new MockTcpTransport(Settings.EMPTY, threadPool, BigArrays.NON_RECYCLING_INSTANCE,
-            new NoneCircuitBreakerService(), namedWriteableRegistry, new NetworkService(Collections.emptyList()), version);
-             MockTransportService service = MockTransportService.createNewService(Settings.EMPTY, transport, version, threadPool, null,
-                 Collections.emptySet())) {
+        try (MockTransportService service = build(Settings.EMPTY, version, null, true)) {
             service.start();
             service.acceptIncomingRequests();
-            DiscoveryNode node =
-                new DiscoveryNode("TS_TPC", "TS_TPC", transport.boundAddress().publishAddress(), emptyMap(), emptySet(),
-                    Version.fromString("2.0.0"));
+            TransportAddress address = service.boundAddress().publishAddress();
+            DiscoveryNode node = new DiscoveryNode("TS_TPC", "TS_TPC", address, emptyMap(), emptySet(), Version.fromString("2.0.0"));
             ConnectionProfile.Builder builder = new ConnectionProfile.Builder();
             builder.addConnections(1,
                 TransportRequestOptions.Type.BULK,
@@ -2646,14 +2643,21 @@ public abstract class AbstractSimpleTransportTestCase extends ESTestCase {
 
     public void testChannelCloseWhileConnecting() {
         try (MockTransportService service = build(Settings.builder().put("name", "close").build(), version0, null, true)) {
-            service.transport.addConnectionListener(new TransportConnectionListener() {
+            AtomicBoolean connectionClosedListenerCalled = new AtomicBoolean(false);
+            service.addConnectionListener(new TransportConnectionListener() {
                 @Override
                 public void onConnectionOpened(final Transport.Connection connection) {
+                    closeConnectionChannel(connection);
                     try {
-                        closeConnectionChannel(service.getOriginalTransport(), connection);
-                    } catch (final IOException e) {
+                        assertBusy(() -> assertTrue(connection.isClosed()));
+                    } catch (Exception e) {
                         throw new AssertionError(e);
                     }
+                }
+
+                @Override
+                public void onConnectionClosed(Transport.Connection connection) {
+                    connectionClosedListenerCalled.set(true);
                 }
             });
             final ConnectionProfile.Builder builder = new ConnectionProfile.Builder();
@@ -2666,13 +2670,18 @@ public abstract class AbstractSimpleTransportTestCase extends ESTestCase {
             final ConnectTransportException e =
                     expectThrows(ConnectTransportException.class, () -> service.openConnection(nodeA, builder.build()));
             assertThat(e, hasToString(containsString(("a channel closed while connecting"))));
+            assertTrue(connectionClosedListenerCalled.get());
         }
     }
 
-    protected abstract void closeConnectionChannel(Transport transport, Transport.Connection connection) throws IOException;
+    private void closeConnectionChannel(Transport.Connection connection) {
+        StubbableTransport.WrappedConnection wrappedConnection = (StubbableTransport.WrappedConnection) connection;
+        TcpTransport.NodeChannels channels = (TcpTransport.NodeChannels) wrappedConnection.getConnection();
+        TcpChannel.closeChannels(channels.getChannels().subList(0, randomIntBetween(1, channels.getChannels().size())), true);
+    }
 
     @SuppressForbidden(reason = "need local ephemeral port")
-    private InetSocketAddress getLocalEphemeral() throws UnknownHostException {
+    protected InetSocketAddress getLocalEphemeral() throws UnknownHostException {
         return new InetSocketAddress(InetAddress.getLocalHost(), 0);
     }
 }

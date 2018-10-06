@@ -19,42 +19,9 @@
 
 package org.elasticsearch.index.engine;
 
-import java.io.Closeable;
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.charset.Charset;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Base64;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashSet;
-import java.util.Iterator;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Queue;
-import java.util.Set;
-import java.util.concurrent.BrokenBarrierException;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.CyclicBarrier;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiFunction;
-import java.util.function.Function;
-import java.util.function.LongSupplier;
-import java.util.function.Supplier;
-import java.util.function.ToLongBiFunction;
-import java.util.stream.Collectors;
-import java.util.stream.LongStream;
-
 import com.carrotsearch.hppc.cursors.ObjectObjectCursor;
 import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
+
 import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -89,6 +56,7 @@ import org.apache.lucene.index.TieredMergePolicy;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.MatchAllDocsQuery;
 import org.apache.lucene.search.ReferenceManager;
+import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortedSetSortField;
 import org.apache.lucene.search.TermQuery;
@@ -161,6 +129,40 @@ import org.elasticsearch.indices.breaker.NoneCircuitBreakerService;
 import org.elasticsearch.test.IndexSettingsModule;
 import org.hamcrest.MatcherAssert;
 import org.hamcrest.Matchers;
+
+import java.io.Closeable;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.charset.Charset;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Queue;
+import java.util.Set;
+import java.util.concurrent.BrokenBarrierException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
+import java.util.function.Function;
+import java.util.function.LongSupplier;
+import java.util.function.Supplier;
+import java.util.function.ToLongBiFunction;
+import java.util.stream.Collectors;
+import java.util.stream.LongStream;
 
 import static java.util.Collections.emptyMap;
 import static java.util.Collections.shuffle;
@@ -1634,11 +1636,18 @@ public class InternalEngineTests extends EngineTestCase {
                 between(10, 10 * IndexSettings.MAX_REFRESH_LISTENERS_PER_SHARD.get(Settings.EMPTY)))
             .build());
 
-        try (Store oldReplicaStore = createStore();
-             InternalEngine replicaEngine =
-                 createEngine(oldSettings, oldReplicaStore, createTempDir("translog-old-replica"), newMergePolicy())) {
-            final List<Engine.Operation> ops = generateSingleDocHistory(true, randomFrom(VersionType.INTERNAL, VersionType.EXTERNAL), true, 2, 2, 20, "1");
-            assertOpsOnReplica(ops, replicaEngine, true, logger);
+        try (Store oldReplicaStore = createStore()) {
+            Path translogPath = createTempDir("translog-old-replica");
+            String translogUUID = Translog.createEmptyTranslog(translogPath, SequenceNumbers.NO_OPS_PERFORMED, shardId, primaryTerm.get());
+            EngineConfig engineConfig = config(oldSettings, oldReplicaStore, translogPath, newMergePolicy(), null);
+            oldReplicaStore.createEmpty();
+            oldReplicaStore.associateIndexWithNewTranslog(translogUUID);
+            try (InternalEngine replicaEngine = new InternalEngine(engineConfig)) {
+                replicaEngine.recoverFromTranslog(translogHandler, Long.MAX_VALUE);
+                final List<Engine.Operation> ops = generateSingleDocHistory(
+                    true, randomFrom(VersionType.INTERNAL, VersionType.EXTERNAL), true, 2, 2, 20, "1");
+                assertOpsOnReplica(ops, replicaEngine, true, logger);
+            }
         }
     }
 
@@ -2025,8 +2034,8 @@ public class InternalEngineTests extends EngineTestCase {
             });
             thread[i].start();
         }
-        for (int i = 0; i < thread.length; i++) {
-            thread[i].join();
+        for (Thread element : thread) {
+            element.join();
         }
         List<OpAndVersion> sortedHistory = new ArrayList<>(history);
         sortedHistory.sort(Comparator.comparing(o -> o.version));
@@ -3454,8 +3463,8 @@ public class InternalEngineTests extends EngineTestCase {
             });
             thread[i].start();
         }
-        for (int i = 0; i < thread.length; i++) {
-            thread[i].join();
+        for (Thread element : thread) {
+            element.join();
         }
         if (primary) {
             assertEquals(0, engine.getNumVersionLookups());
@@ -3563,8 +3572,8 @@ public class InternalEngineTests extends EngineTestCase {
         try (Engine.Searcher searcher = engine.acquireSearcher("test", Engine.SearcherScope.INTERNAL)) {
             assertEquals("unexpected refresh", 0, searcher.reader().maxDoc());
         }
-        for (int i = 0; i < thread.length; i++) {
-            thread[i].join();
+        for (Thread element : thread) {
+            element.join();
         }
 
         engine.refresh("test");
@@ -4347,7 +4356,7 @@ public class InternalEngineTests extends EngineTestCase {
                     new Term("_id", parsedDocument.id()),
                     parsedDocument,
                     SequenceNumbers.UNASSIGNED_SEQ_NO,
-                    (long) randomIntBetween(1, 8),
+                    randomIntBetween(1, 8),
                     Versions.MATCH_ANY,
                     VersionType.INTERNAL,
                     Engine.Operation.Origin.PRIMARY,
@@ -4363,7 +4372,7 @@ public class InternalEngineTests extends EngineTestCase {
                     id,
                     new Term("_id", parsedDocument.id()),
                     SequenceNumbers.UNASSIGNED_SEQ_NO,
-                    (long) randomIntBetween(1, 8),
+                    randomIntBetween(1, 8),
                     Versions.MATCH_ANY,
                     VersionType.INTERNAL,
                     Engine.Operation.Origin.PRIMARY,
@@ -4484,8 +4493,8 @@ public class InternalEngineTests extends EngineTestCase {
         engine.refresh("test", Engine.SearcherScope.INTERNAL);
         try (Engine.Searcher searcher = engine.acquireSearcher("test", Engine.SearcherScope.INTERNAL)) {
             TopDocs search = searcher.searcher().search(new MatchAllDocsQuery(), searcher.reader().numDocs());
-            for (int i = 0; i < search.scoreDocs.length; i++) {
-                org.apache.lucene.document.Document luceneDoc = searcher.searcher().doc(search.scoreDocs[i].doc);
+            for (ScoreDoc scoreDoc : search.scoreDocs) {
+                org.apache.lucene.document.Document luceneDoc = searcher.searcher().doc(scoreDoc.doc);
                 assertEquals("updated", luceneDoc.get("value"));
             }
             int totalNumDocs = numDocs - numDeletes.get();

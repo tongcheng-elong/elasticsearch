@@ -63,6 +63,10 @@ settings, which in turn defaults to `*`.
 and filters the metadata fields. All extracted fields are then combined
 to build a query when no prefix field is provided.
 
+WARNING: In future versions (starting in 7.0), there will be a limit on the number of fields that can
+be queried at once. This limit will be determined by the `indices.query.bool.max_clause_count`
+setting which defaults to 1024. Currently this will be raised and logged as a Warning only.
+
 |`default_operator` |The default operator used if no explicit operator
 is specified. For example, with a default operator of `OR`, the query
 `capital of Hungary` is translated to `capital OR of OR Hungary`, and
@@ -263,12 +267,6 @@ following additional parameters are allowed:
 |`type` |How the fields should be combined to build the text query.
 See <<multi-match-types, types>> for a complete example.
 Defaults to `best_fields`
-|=======================================================================
-
-
-[cols="<,<",options="header",]
-|=======================================================================
-|Parameter |Description
 
 |`tie_breaker` |The disjunction max tie breaker for multi fields.
 Defaults to `0`

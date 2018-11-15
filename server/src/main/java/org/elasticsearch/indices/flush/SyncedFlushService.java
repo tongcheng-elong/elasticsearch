@@ -40,7 +40,6 @@ import org.elasticsearch.common.component.AbstractComponent;
 import org.elasticsearch.common.inject.Inject;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
-import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.concurrent.ConcurrentCollections;
 import org.elasticsearch.common.util.concurrent.CountDown;
 import org.elasticsearch.index.Index;
@@ -83,8 +82,7 @@ public class SyncedFlushService extends AbstractComponent implements IndexEventL
     private final IndexNameExpressionResolver indexNameExpressionResolver;
 
     @Inject
-    public SyncedFlushService(Settings settings, IndicesService indicesService, ClusterService clusterService, TransportService transportService, IndexNameExpressionResolver indexNameExpressionResolver) {
-        super(settings);
+    public SyncedFlushService(IndicesService indicesService, ClusterService clusterService, TransportService transportService, IndexNameExpressionResolver indexNameExpressionResolver) {
         this.indicesService = indicesService;
         this.clusterService = clusterService;
         this.transportService = transportService;
@@ -312,8 +310,10 @@ public class SyncedFlushService extends AbstractComponent implements IndexEventL
             transportService.sendRequest(primaryNode, IN_FLIGHT_OPS_ACTION_NAME, new InFlightOpsRequest(shardId),
                     new TransportResponseHandler<InFlightOpsResponse>() {
                         @Override
-                        public InFlightOpsResponse newInstance() {
-                            return new InFlightOpsResponse();
+                        public InFlightOpsResponse read(StreamInput in) throws IOException {
+                            InFlightOpsResponse response = new InFlightOpsResponse();
+                            response.readFrom(in);
+                            return response;
                         }
 
                         @Override
@@ -382,8 +382,10 @@ public class SyncedFlushService extends AbstractComponent implements IndexEventL
             transportService.sendRequest(node, SYNCED_FLUSH_ACTION_NAME, new ShardSyncedFlushRequest(shard.shardId(), syncId, preSyncedResponse.commitId),
                     new TransportResponseHandler<ShardSyncedFlushResponse>() {
                         @Override
-                        public ShardSyncedFlushResponse newInstance() {
-                            return new ShardSyncedFlushResponse();
+                        public ShardSyncedFlushResponse read(StreamInput in) throws IOException {
+                            ShardSyncedFlushResponse response = new ShardSyncedFlushResponse();
+                            response.readFrom(in);
+                            return response;
                         }
 
                         @Override
@@ -436,8 +438,10 @@ public class SyncedFlushService extends AbstractComponent implements IndexEventL
             }
             transportService.sendRequest(node, PRE_SYNCED_FLUSH_ACTION_NAME, new PreShardSyncedFlushRequest(shard.shardId()), new TransportResponseHandler<PreSyncedFlushResponse>() {
                 @Override
-                public PreSyncedFlushResponse newInstance() {
-                    return new PreSyncedFlushResponse();
+                public PreSyncedFlushResponse read(StreamInput in) throws IOException {
+                    PreSyncedFlushResponse response = new PreSyncedFlushResponse();
+                    response.readFrom(in);
+                    return response;
                 }
 
                 @Override

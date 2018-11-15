@@ -14,6 +14,7 @@ import org.elasticsearch.action.support.master.MasterNodeReadRequest;
 import org.elasticsearch.client.ElasticsearchClient;
 import org.elasticsearch.common.io.stream.StreamInput;
 import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.common.io.stream.Writeable;
 import org.elasticsearch.common.xcontent.ToXContentObject;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.ccr.AutoFollowMetadata.AutoFollowPattern;
@@ -34,7 +35,12 @@ public class GetAutoFollowPatternAction
 
     @Override
     public Response newResponse() {
-        return new Response();
+        throw new UnsupportedOperationException("usage of Streamable is to be replaced by Writeable");
+    }
+
+    @Override
+    public Writeable.Reader<Response> getResponseReader() {
+        return Response::new;
     }
 
     @Override
@@ -44,7 +50,7 @@ public class GetAutoFollowPatternAction
 
     public static class Request extends MasterNodeReadRequest<Request> {
 
-        private String leaderClusterAlias;
+        private String name;
 
         public Request() {
         }
@@ -54,24 +60,23 @@ public class GetAutoFollowPatternAction
             return null;
         }
 
-        public String getLeaderClusterAlias() {
-            return leaderClusterAlias;
+        public String getName() {
+            return name;
         }
 
-        public void setLeaderClusterAlias(String leaderClusterAlias) {
-            this.leaderClusterAlias = leaderClusterAlias;
+        public void setName(String name) {
+            this.name = name;
         }
 
-        @Override
-        public void readFrom(StreamInput in) throws IOException {
-            super.readFrom(in);
-            this.leaderClusterAlias = in.readOptionalString();
+        public Request(StreamInput in) throws IOException {
+            super(in);
+            this.name = in.readOptionalString();
         }
 
         @Override
         public void writeTo(StreamOutput out) throws IOException {
             super.writeTo(out);
-            out.writeOptionalString(leaderClusterAlias);
+            out.writeOptionalString(name);
         }
 
         @Override
@@ -79,32 +84,28 @@ public class GetAutoFollowPatternAction
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
             Request request = (Request) o;
-            return Objects.equals(leaderClusterAlias, request.leaderClusterAlias);
+            return Objects.equals(name, request.name);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(leaderClusterAlias);
+            return Objects.hash(name);
         }
     }
 
     public static class Response extends ActionResponse implements ToXContentObject {
 
-        private Map<String, AutoFollowPattern> autoFollowPatterns;
+        private final Map<String, AutoFollowPattern> autoFollowPatterns;
 
         public Response(Map<String, AutoFollowPattern> autoFollowPatterns) {
             this.autoFollowPatterns = autoFollowPatterns;
-        }
-
-        public Response() {
         }
 
         public Map<String, AutoFollowPattern> getAutoFollowPatterns() {
             return autoFollowPatterns;
         }
 
-        @Override
-        public void readFrom(StreamInput in) throws IOException {
+        public Response(StreamInput in) throws IOException {
             super.readFrom(in);
             autoFollowPatterns = in.readMap(StreamInput::readString, AutoFollowPattern::new);
         }

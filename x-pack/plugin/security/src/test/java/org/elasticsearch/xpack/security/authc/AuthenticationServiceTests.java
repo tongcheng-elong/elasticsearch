@@ -87,6 +87,7 @@ import java.util.function.Consumer;
 
 import static org.elasticsearch.test.SecurityTestsUtils.assertAuthenticationException;
 import static org.elasticsearch.xpack.core.security.support.Exceptions.authenticationError;
+import static org.elasticsearch.xpack.security.authc.TokenServiceTests.mockCheckTokenInvalidationFromId;
 import static org.elasticsearch.xpack.security.authc.TokenServiceTests.mockGetTokenFromId;
 import static org.hamcrest.Matchers.arrayContaining;
 import static org.hamcrest.Matchers.contains;
@@ -187,6 +188,11 @@ public class AuthenticationServiceTests extends ESTestCase {
             runnable.run();
             return null;
         }).when(securityIndex).prepareIndexIfNeededThenExecute(any(Consumer.class), any(Runnable.class));
+        doAnswer(invocationOnMock -> {
+            Runnable runnable = (Runnable) invocationOnMock.getArguments()[1];
+            runnable.run();
+            return null;
+        }).when(securityIndex).checkIndexVersionThenExecute(any(Consumer.class), any(Runnable.class));
         ClusterService clusterService = ClusterServiceUtils.createClusterService(threadPool);
         tokenService = new TokenService(settings, Clock.systemUTC(), client, securityIndex, clusterService);
         service = new AuthenticationService(settings, realms, auditTrail,
@@ -718,7 +724,7 @@ public class AuthenticationServiceTests extends ESTestCase {
         when(secondRealm.supports(token)).thenReturn(true);
         mockAuthenticate(secondRealm, token, new User("lookup user", new String[]{"user"}));
         mockRealmLookupReturnsNull(firstRealm, "run_as");
-        doThrow(authenticationError("realm doesn't want to " + "lookup"))
+        doThrow(authenticationError("realm doesn't want to lookup"))
                 .when(secondRealm).lookupUser(eq("run_as"), any(ActionListener.class));
 
         try {
@@ -897,7 +903,11 @@ public class AuthenticationServiceTests extends ESTestCase {
             tokenService.createUserToken(expected, originatingAuth, tokenFuture, Collections.emptyMap(), true);
         }
         String token = tokenService.getUserTokenString(tokenFuture.get().v1());
+        when(client.prepareMultiGet()).thenReturn(new MultiGetRequestBuilder(client, MultiGetAction.INSTANCE));
         mockGetTokenFromId(tokenFuture.get().v1(), client);
+        mockCheckTokenInvalidationFromId(tokenFuture.get().v1(), client);
+        when(securityIndex.isAvailable()).thenReturn(true);
+        when(securityIndex.indexExists()).thenReturn(true);
         try (ThreadContext.StoredContext ignore = threadContext.stashContext()) {
             threadContext.putHeader("Authorization", "Bearer " + token);
             service.authenticate("_action", message, (User)null, ActionListener.wrap(result -> {
@@ -1027,12 +1037,22 @@ public class AuthenticationServiceTests extends ESTestCase {
     }
 
     private void mockAuthenticate(Realm realm, AuthenticationToken token, User user) {
-        doAnswer((i) -> {
-            ActionListener listener = (ActionListener) i.getArguments()[1];
-            if (user == null) {
-                listener.onResponse(AuthenticationResult.notHandled());
+        final boolean separateThread = randomBoolean();
+        doAnswer(i -> {
+            ActionListener<AuthenticationResult> listener = (ActionListener<AuthenticationResult>) i.getArguments()[1];
+            Runnable run = () -> {
+                if (user == null) {
+                    listener.onResponse(AuthenticationResult.notHandled());
+                } else {
+                    listener.onResponse(AuthenticationResult.success(user));
+                }
+            };
+            if (separateThread) {
+                final Thread thread = new Thread(run);
+                thread.start();
+                thread.join();
             } else {
-                listener.onResponse(AuthenticationResult.success(user));
+                run.run();
             }
             return null;
         }).when(realm).authenticate(eq(token), any(ActionListener.class));

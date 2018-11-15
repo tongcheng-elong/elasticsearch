@@ -39,9 +39,11 @@ import org.elasticsearch.client.ml.GetCalendarsRequest;
 import org.elasticsearch.client.ml.GetCategoriesRequest;
 import org.elasticsearch.client.ml.GetDatafeedRequest;
 import org.elasticsearch.client.ml.GetDatafeedStatsRequest;
+import org.elasticsearch.client.ml.GetFiltersRequest;
 import org.elasticsearch.client.ml.GetInfluencersRequest;
 import org.elasticsearch.client.ml.GetJobRequest;
 import org.elasticsearch.client.ml.GetJobStatsRequest;
+import org.elasticsearch.client.ml.GetModelSnapshotsRequest;
 import org.elasticsearch.client.ml.GetOverallBucketsRequest;
 import org.elasticsearch.client.ml.GetRecordsRequest;
 import org.elasticsearch.client.ml.OpenJobRequest;
@@ -49,10 +51,14 @@ import org.elasticsearch.client.ml.PostDataRequest;
 import org.elasticsearch.client.ml.PreviewDatafeedRequest;
 import org.elasticsearch.client.ml.PutCalendarRequest;
 import org.elasticsearch.client.ml.PutDatafeedRequest;
+import org.elasticsearch.client.ml.PutFilterRequest;
 import org.elasticsearch.client.ml.PutJobRequest;
 import org.elasticsearch.client.ml.StartDatafeedRequest;
 import org.elasticsearch.client.ml.StopDatafeedRequest;
+import org.elasticsearch.client.ml.UpdateDatafeedRequest;
+import org.elasticsearch.client.ml.UpdateFilterRequest;
 import org.elasticsearch.client.ml.UpdateJobRequest;
+import org.elasticsearch.client.ml.job.util.PageParams;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
 
@@ -88,8 +94,8 @@ final class MLRequestConverters {
         Request request = new Request(HttpGet.METHOD_NAME, endpoint);
 
         RequestConverters.Params params = new RequestConverters.Params(request);
-        if (getJobRequest.isAllowNoJobs() != null) {
-            params.putParam("allow_no_jobs", Boolean.toString(getJobRequest.isAllowNoJobs()));
+        if (getJobRequest.getAllowNoJobs() != null) {
+            params.putParam("allow_no_jobs", Boolean.toString(getJobRequest.getAllowNoJobs()));
         }
 
         return request;
@@ -106,8 +112,8 @@ final class MLRequestConverters {
         Request request = new Request(HttpGet.METHOD_NAME, endpoint);
 
         RequestConverters.Params params = new RequestConverters.Params(request);
-        if (getJobStatsRequest.isAllowNoJobs() != null) {
-            params.putParam("allow_no_jobs", Boolean.toString(getJobStatsRequest.isAllowNoJobs()));
+        if (getJobStatsRequest.getAllowNoJobs() != null) {
+            params.putParam("allow_no_jobs", Boolean.toString(getJobStatsRequest.getAllowNoJobs()));
         }
         return request;
     }
@@ -209,6 +215,19 @@ final class MLRequestConverters {
         return request;
     }
 
+    static Request updateDatafeed(UpdateDatafeedRequest updateDatafeedRequest) throws IOException {
+        String endpoint = new EndpointBuilder()
+            .addPathPartAsIs("_xpack")
+            .addPathPartAsIs("ml")
+            .addPathPartAsIs("datafeeds")
+            .addPathPart(updateDatafeedRequest.getDatafeedUpdate().getId())
+            .addPathPartAsIs("_update")
+            .build();
+        Request request = new Request(HttpPost.METHOD_NAME, endpoint);
+        request.setEntity(createEntity(updateDatafeedRequest, REQUEST_BODY_CONTENT_TYPE));
+        return request;
+    }
+
     static Request getDatafeed(GetDatafeedRequest getDatafeedRequest) {
         String endpoint = new EndpointBuilder()
                 .addPathPartAsIs("_xpack")
@@ -219,9 +238,9 @@ final class MLRequestConverters {
         Request request = new Request(HttpGet.METHOD_NAME, endpoint);
 
         RequestConverters.Params params = new RequestConverters.Params(request);
-        if (getDatafeedRequest.isAllowNoDatafeeds() != null) {
+        if (getDatafeedRequest.getAllowNoDatafeeds() != null) {
             params.putParam(GetDatafeedRequest.ALLOW_NO_DATAFEEDS.getPreferredName(),
-                    Boolean.toString(getDatafeedRequest.isAllowNoDatafeeds()));
+                    Boolean.toString(getDatafeedRequest.getAllowNoDatafeeds()));
         }
 
         return request;
@@ -236,7 +255,9 @@ final class MLRequestConverters {
                 .build();
         Request request = new Request(HttpDelete.METHOD_NAME, endpoint);
         RequestConverters.Params params = new RequestConverters.Params(request);
-        params.putParam("force", Boolean.toString(deleteDatafeedRequest.isForce()));
+        if (deleteDatafeedRequest.getForce() != null) {
+            params.putParam("force", Boolean.toString(deleteDatafeedRequest.getForce()));
+        }
         return request;
     }
 
@@ -277,8 +298,8 @@ final class MLRequestConverters {
         Request request = new Request(HttpGet.METHOD_NAME, endpoint);
 
         RequestConverters.Params params = new RequestConverters.Params(request);
-        if (getDatafeedStatsRequest.isAllowNoDatafeeds() != null) {
-            params.putParam("allow_no_datafeeds", Boolean.toString(getDatafeedStatsRequest.isAllowNoDatafeeds()));
+        if (getDatafeedStatsRequest.getAllowNoDatafeeds() != null) {
+            params.putParam("allow_no_datafeeds", Boolean.toString(getDatafeedStatsRequest.getAllowNoDatafeeds()));
         }
         return request;
     }
@@ -305,8 +326,8 @@ final class MLRequestConverters {
             .build();
         Request request = new Request(HttpDelete.METHOD_NAME, endpoint);
         RequestConverters.Params params = new RequestConverters.Params(request);
-        if (deleteForecastRequest.isAllowNoForecasts() != null) {
-            params.putParam("allow_no_forecasts", Boolean.toString(deleteForecastRequest.isAllowNoForecasts()));
+        if (deleteForecastRequest.getAllowNoForecasts() != null) {
+            params.putParam("allow_no_forecasts", Boolean.toString(deleteForecastRequest.getAllowNoForecasts()));
         }
         if (deleteForecastRequest.timeout() != null) {
             params.putParam("timeout", deleteForecastRequest.timeout().getStringRep());
@@ -339,6 +360,19 @@ final class MLRequestConverters {
             .build();
         Request request = new Request(HttpGet.METHOD_NAME, endpoint);
         request.setEntity(createEntity(getCategoriesRequest, REQUEST_BODY_CONTENT_TYPE));
+        return request;
+    }
+
+    static Request getModelSnapshots(GetModelSnapshotsRequest getModelSnapshotsRequest) throws IOException {
+        String endpoint = new EndpointBuilder()
+            .addPathPartAsIs("_xpack")
+            .addPathPartAsIs("ml")
+            .addPathPartAsIs("anomaly_detectors")
+            .addPathPart(getModelSnapshotsRequest.getJobId())
+            .addPathPartAsIs("model_snapshots")
+            .build();
+        Request request = new Request(HttpGet.METHOD_NAME, endpoint);
+        request.setEntity(createEntity(getModelSnapshotsRequest, REQUEST_BODY_CONTENT_TYPE));
         return request;
     }
 
@@ -445,6 +479,49 @@ final class MLRequestConverters {
                 .addPathPart(deleteCalendarRequest.getCalendarId())
                 .build();
         Request request = new Request(HttpDelete.METHOD_NAME, endpoint);
+        return request;
+    }
+
+    static Request putFilter(PutFilterRequest putFilterRequest) throws IOException {
+        String endpoint = new EndpointBuilder()
+            .addPathPartAsIs("_xpack")
+            .addPathPartAsIs("ml")
+            .addPathPartAsIs("filters")
+            .addPathPart(putFilterRequest.getMlFilter().getId())
+            .build();
+        Request request = new Request(HttpPut.METHOD_NAME, endpoint);
+        request.setEntity(createEntity(putFilterRequest, REQUEST_BODY_CONTENT_TYPE));
+        return request;
+    }
+
+    static Request getFilter(GetFiltersRequest getFiltersRequest) {
+        String endpoint = new EndpointBuilder()
+            .addPathPartAsIs("_xpack")
+            .addPathPartAsIs("ml")
+            .addPathPartAsIs("filters")
+            .addPathPart(getFiltersRequest.getFilterId())
+            .build();
+        Request request = new Request(HttpGet.METHOD_NAME, endpoint);
+        RequestConverters.Params params = new RequestConverters.Params(request);
+        if (getFiltersRequest.getSize() != null) {
+            params.putParam(PageParams.SIZE.getPreferredName(), getFiltersRequest.getSize().toString());
+        }
+        if (getFiltersRequest.getFrom() != null) {
+            params.putParam(PageParams.FROM.getPreferredName(), getFiltersRequest.getFrom().toString());
+        }
+        return request;
+    }
+
+    static Request updateFilter(UpdateFilterRequest updateFilterRequest) throws IOException {
+        String endpoint = new EndpointBuilder()
+            .addPathPartAsIs("_xpack")
+            .addPathPartAsIs("ml")
+            .addPathPartAsIs("filters")
+            .addPathPart(updateFilterRequest.getFilterId())
+            .addPathPartAsIs("_update")
+            .build();
+        Request request = new Request(HttpPost.METHOD_NAME, endpoint);
+        request.setEntity(createEntity(updateFilterRequest, REQUEST_BODY_CONTENT_TYPE));
         return request;
     }
 }

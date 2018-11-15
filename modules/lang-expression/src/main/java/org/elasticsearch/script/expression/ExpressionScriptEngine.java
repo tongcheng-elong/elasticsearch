@@ -30,8 +30,6 @@ import org.apache.lucene.search.Scorer;
 import org.apache.lucene.search.SortField;
 import org.elasticsearch.SpecialPermission;
 import org.elasticsearch.common.Nullable;
-import org.elasticsearch.common.component.AbstractComponent;
-import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.fielddata.IndexFieldData;
 import org.elasticsearch.index.fielddata.IndexNumericFieldData;
 import org.elasticsearch.index.mapper.DateFieldMapper;
@@ -63,13 +61,9 @@ import java.util.Map;
  * Provides the infrastructure for Lucene expressions as a scripting language for Elasticsearch.  Only
  * {@link SearchScript}s are supported.
  */
-public class ExpressionScriptEngine extends AbstractComponent implements ScriptEngine {
+public class ExpressionScriptEngine implements ScriptEngine {
 
     public static final String NAME = "expression";
-
-    public ExpressionScriptEngine(Settings settings) {
-        super(settings);
-    }
 
     @Override
     public String getType() {
@@ -213,7 +207,8 @@ public class ExpressionScriptEngine extends AbstractComponent implements ScriptE
                         } else if (parts[2].type == VariableContext.Type.MEMBER) {
                             variablename = parts[2].text;
                         } else {
-                            throw new IllegalArgumentException("Only member variables or member methods may be accessed on a field when not accessing the field directly");
+                            throw new IllegalArgumentException("Only member variables or member methods may be accessed on a "
+                                    + "field when not accessing the field directly");
                         }
                     }
                     if (parts.length > 3) {
@@ -228,7 +223,8 @@ public class ExpressionScriptEngine extends AbstractComponent implements ScriptE
                             }
                         }
                         if (!dateAccessor) {
-                            throw new IllegalArgumentException("Variable [" + variable + "] does not follow an allowed format of either doc['field'] or doc['field'].method()");
+                            throw new IllegalArgumentException("Variable [" + variable + "] does not follow an allowed format of "
+                                    + "either doc['field'] or doc['field'].method()");
                         }
                     }
 

@@ -58,7 +58,7 @@ public final class AzureStorageSettings {
         key -> SecureSetting.secureString(key, null));
 
     /** max_retries: Number of retries in case of Azure errors. Defaults to 3 (RetryPolicy.DEFAULT_CLIENT_RETRY_COUNT). */
-    private static final Setting<Integer> MAX_RETRIES_SETTING =
+    public static final Setting<Integer> MAX_RETRIES_SETTING =
         Setting.affixKeySetting(AZURE_CLIENT_PREFIX_KEY, "max_retries",
             (key) -> Setting.intSetting(key, RetryPolicy.DEFAULT_CLIENT_RETRY_COUNT, Setting.Property.NodeScope),
             ACCOUNT_SETTING, KEY_SETTING);
@@ -367,7 +367,8 @@ public final class AzureStorageSettings {
                     if (primary == null) {
                         primary = setting;
                     } else {
-                        throw new SettingsException("Multiple default Azure data stores configured: [" + primary.getName() + "] and [" + setting.getName() + "]");
+                        throw new SettingsException("Multiple default Azure data stores configured: [" + primary.getName()
+                                + "] and [" + setting.getName() + "]");
                     }
                 }
             }

@@ -20,9 +20,10 @@
 package org.elasticsearch.ingest.common;
 
 import org.apache.logging.log4j.Logger;
+import org.apache.logging.log4j.LogManager;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.logging.DeprecationLogger;
-import org.elasticsearch.common.logging.ESLoggerFactory;
+import org.elasticsearch.common.util.CollectionUtils;
 import org.elasticsearch.ingest.AbstractProcessor;
 import org.elasticsearch.ingest.IngestDocument;
 import org.elasticsearch.ingest.Processor;
@@ -70,9 +71,11 @@ public final class ScriptProcessor extends AbstractProcessor {
      * @param document The Ingest document passed into the script context under the "ctx" object.
      */
     @Override
-    public void execute(IngestDocument document) {
+    public IngestDocument execute(IngestDocument document) {
         IngestScript.Factory factory = scriptService.compile(script, IngestScript.CONTEXT);
         factory.newInstance(script.getParams()).execute(document.getSourceAndMetadata());
+        CollectionUtils.ensureNoSelfReferences(document.getSourceAndMetadata());
+        return document;
     }
 
     @Override
@@ -85,7 +88,7 @@ public final class ScriptProcessor extends AbstractProcessor {
     }
 
     public static final class Factory implements Processor.Factory {
-        private final Logger logger = ESLoggerFactory.getLogger(Factory.class);
+        private final Logger logger = LogManager.getLogger(Factory.class);
         private final DeprecationLogger deprecationLogger = new DeprecationLogger(logger);
 
         private final ScriptService scriptService;

@@ -20,6 +20,8 @@
 package org.elasticsearch.index.mapper;
 
 import org.elasticsearch.ExceptionsHelper;
+import org.elasticsearch.Version;
+import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.compress.CompressedXContent;
@@ -33,7 +35,6 @@ import org.elasticsearch.index.mapper.MapperService.MergeReason;
 import org.elasticsearch.index.mapper.NumberFieldMapper.NumberFieldType;
 import org.elasticsearch.indices.InvalidTypeNameException;
 import org.elasticsearch.test.ESSingleNodeTestCase;
-import org.hamcrest.Matchers;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -46,6 +47,11 @@ import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.startsWith;
 
 public class MapperServiceTests extends ESSingleNodeTestCase {
+    @Override
+    protected boolean forbidPrivateIndexSettings() {
+        // this is needed to force the index version in the _parent tests
+        return false;
+    }
 
     public void testTypeNameStartsWithIllegalDot() {
         String index = "test-index";
@@ -69,7 +75,8 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
                     .addMapping(type, field, "type=text")
                     .execute().actionGet();
         });
-        assertTrue(e.getMessage(), e.getMessage().contains("mapping type name [" + type + "] is too long; limit is length 255 but was [256]"));
+        assertTrue(e.getMessage(), e.getMessage().contains("mapping type name [" + type
+            + "] is too long; limit is length 255 but was [256]"));
     }
 
     public void testTypeValidation() {
@@ -84,9 +91,9 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
 
     public void testIndexIntoDefaultMapping() throws Throwable {
         // 1. test implicit index creation
-        ExecutionException e = expectThrows(ExecutionException.class, () -> {
-            client().prepareIndex("index1", MapperService.DEFAULT_MAPPING, "1").setSource("{}", XContentType.JSON).execute().get();
-        });
+        ExecutionException e = expectThrows(ExecutionException.class,
+            () -> client().prepareIndex("index1", MapperService.DEFAULT_MAPPING, "1")
+                .setSource("{}", XContentType.JSON).execute().get());
         Throwable throwable = ExceptionsHelper.unwrapCause(e.getCause());
         if (throwable instanceof IllegalArgumentException) {
             assertEquals("It is forbidden to index into the default mapping [_default_]", throwable.getMessage());
@@ -115,14 +122,15 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
      */
     public void testTotalFieldsLimit() throws Throwable {
         int totalFieldsLimit = randomIntBetween(1, 10);
-        Settings settings = Settings.builder().put(MapperService.INDEX_MAPPING_TOTAL_FIELDS_LIMIT_SETTING.getKey(), totalFieldsLimit).build();
+        Settings settings = Settings.builder().put(MapperService.INDEX_MAPPING_TOTAL_FIELDS_LIMIT_SETTING.getKey(), totalFieldsLimit)
+            .build();
         createIndex("test1", settings).mapperService().merge("type", createMappingSpecifyingNumberOfFields(totalFieldsLimit),
                 MergeReason.MAPPING_UPDATE, false);
 
         // adding one more field should trigger exception
         IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> {
-            createIndex("test2", settings).mapperService().merge("type", createMappingSpecifyingNumberOfFields(totalFieldsLimit + 1),
-                    MergeReason.MAPPING_UPDATE, false);
+            createIndex("test2", settings).mapperService().merge("type",
+                createMappingSpecifyingNumberOfFields(totalFieldsLimit + 1), MergeReason.MAPPING_UPDATE, false);
         });
         assertTrue(e.getMessage(),
                 e.getMessage().contains("Limit of total fields [" + totalFieldsLimit + "] in index [test2] has been exceeded"));
@@ -144,7 +152,8 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
         IndexService indexService1 = createIndex("test1",
                 Settings.builder().put(MapperService.INDEX_MAPPING_DEPTH_LIMIT_SETTING.getKey(), 1).build());
         // no exception
-        indexService1.mapperService().merge("type", createMappingSpecifyingNumberOfFields(1), MergeReason.MAPPING_UPDATE, false);
+        indexService1.mapperService().merge("type", createMappingSpecifyingNumberOfFields(1),
+            MergeReason.MAPPING_UPDATE, false);
 
         CompressedXContent objectMapping = new CompressedXContent(BytesReference.bytes(XContentFactory.jsonBuilder().startObject()
                 .startObject("properties")
@@ -240,6 +249,7 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
                     .addMapping("child", "{\"child\": {\"_routing\":{\"required\":true}, \"_parent\": {\"type\": \"parent\"}}}",
                         XContentType.JSON)
                     .setSettings(Settings.builder()
+                        .put(IndexMetaData.SETTING_VERSION_CREATED, Version.V_6_4_0)
                         .put("index.number_of_shards", 4)
                         .put("index.routing_partition_size", 2))
                     .execute().actionGet();
@@ -336,7 +346,8 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
         IllegalArgumentException e = expectThrows(IllegalArgumentException.class, () -> {
             createIndex("test2",
                     Settings.builder().put(MapperService.INDEX_MAPPING_TOTAL_FIELDS_LIMIT_SETTING.getKey(), numberOfNonAliasFields).build())
-                            .mapperService().merge("type", new CompressedXContent(mapping), MergeReason.MAPPING_UPDATE, true);
+                            .mapperService().merge("type", new CompressedXContent(mapping),
+                MergeReason.MAPPING_UPDATE, true);
         });
         assertEquals("Limit of total fields [" + numberOfNonAliasFields + "] in index [test2] has been exceeded", e.getMessage());
     }
@@ -349,7 +360,7 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
         String mapping2 = Strings.toString(XContentFactory.jsonBuilder().startObject().startObject("type2").endObject().endObject());
         IllegalArgumentException e = expectThrows(IllegalArgumentException.class,
                 () -> mapperService.merge("type2", new CompressedXContent(mapping2), MergeReason.MAPPING_UPDATE, randomBoolean()));
-        assertThat(e.getMessage(), Matchers.startsWith("Rejecting mapping update to [test] as the final mapping would have more than 1 type: "));
+        assertThat(e.getMessage(), startsWith("Rejecting mapping update to [test] as the final mapping would have more than 1 type: "));
     }
 
     /**
@@ -358,15 +369,17 @@ public class MapperServiceTests extends ESSingleNodeTestCase {
      */
     public void testForbidMultipleTypesWithConflictingMappings() throws IOException {
         String mapping = Strings.toString(XContentFactory.jsonBuilder().startObject().startObject("type")
-            .startObject("properties").startObject("field1").field("type", "integer_range").endObject().endObject().endObject().endObject());
+            .startObject("properties").startObject("field1").field("type", "integer_range")
+            .endObject().endObject().endObject().endObject());
         MapperService mapperService = createIndex("test").mapperService();
         mapperService.merge("type", new CompressedXContent(mapping), MergeReason.MAPPING_UPDATE, false);
 
         String mapping2 = Strings.toString(XContentFactory.jsonBuilder().startObject().startObject("type2")
-            .startObject("properties").startObject("field1").field("type", "integer").endObject().endObject().endObject().endObject());
+            .startObject("properties").startObject("field1").field("type", "integer")
+            .endObject().endObject().endObject().endObject());
         IllegalArgumentException e = expectThrows(IllegalArgumentException.class,
             () -> mapperService.merge("type2", new CompressedXContent(mapping2), MergeReason.MAPPING_UPDATE, false));
-        assertThat(e.getMessage(), Matchers.startsWith("Rejecting mapping update to [test] as the final mapping would have more than 1 type: "));
+        assertThat(e.getMessage(), startsWith("Rejecting mapping update to [test] as the final mapping would have more than 1 type: "));
     }
 
     public void testDefaultMappingIsDeprecated() throws IOException {

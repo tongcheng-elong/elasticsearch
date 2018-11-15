@@ -19,6 +19,8 @@
 
 package org.elasticsearch.search.fetch;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.search.DocIdSetIterator;
@@ -70,6 +72,7 @@ import java.util.Set;
  * after reducing all of the matches returned by the query phase
  */
 public class FetchPhase implements SearchPhase {
+    private static final Logger LOGGER = LogManager.getLogger(FetchPhase.class);
 
     private final FetchSubPhase[] fetchSubPhases;
 
@@ -84,6 +87,11 @@ public class FetchPhase implements SearchPhase {
 
     @Override
     public void execute(SearchContext context) {
+
+        if (LOGGER.isTraceEnabled()) {
+            LOGGER.trace("{}", new SearchContextSourcePrinter(context));
+        }
+
         final FieldsVisitor fieldsVisitor;
         Map<String, Set<String>> storedToRequestedFields = new HashMap<>();
         StoredFieldsContext storedFieldsContext = context.storedFieldsContext();
@@ -277,7 +285,16 @@ public class FetchPhase implements SearchPhase {
                 storedToRequestedFields, subReaderContext);
         }
 
-        DocumentMapper documentMapper = context.mapperService().documentMapper(uid.type());
+        final String typeText;
+        if (uid != null && uid.type() != null) {
+            typeText = uid.type();
+        } else {
+            // stored fields are disabled but it is not allowed to disable them on inner hits
+            // if the index has multiple types so we can assume that the index has a single type.
+            assert context.mapperService().types().size() == 1;
+            typeText = context.mapperService().types().iterator().next();
+        }
+        DocumentMapper documentMapper = context.mapperService().documentMapper(typeText);
         SourceLookup sourceLookup = context.lookup().source();
         sourceLookup.setSegmentAndDocument(subReaderContext, nestedSubDocId);
 

@@ -29,6 +29,7 @@ import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.util.concurrent.ThreadContext;
 import org.elasticsearch.common.xcontent.XContentBuilder;
 import org.elasticsearch.common.xcontent.XContentType;
+import org.elasticsearch.core.internal.io.IOUtils;
 import org.elasticsearch.ingest.Pipeline;
 import org.elasticsearch.test.rest.ESRestTestCase;
 import org.junit.AfterClass;
@@ -54,7 +55,7 @@ public abstract class ESRestHighLevelClientTestCase extends ESRestTestCase {
 
     @AfterClass
     public static void cleanupClient() throws IOException {
-        restHighLevelClient.close();
+        IOUtils.close(restHighLevelClient);
         restHighLevelClient = null;
     }
 
@@ -76,14 +77,40 @@ public abstract class ESRestHighLevelClientTestCase extends ESRestTestCase {
         }
     }
 
+    /**
+     * Executes the provided request using either the sync method or its async
+     * variant, both provided as functions. This variant is used when the call does
+     * not have a request object (only headers and the request path).
+     */
+    protected static <Resp> Resp execute(SyncMethodNoRequest<Resp> syncMethodNoRequest, AsyncMethodNoRequest<Resp> asyncMethodNoRequest,
+            RequestOptions requestOptions) throws IOException {
+        if (randomBoolean()) {
+            return syncMethodNoRequest.execute(requestOptions);
+        } else {
+            PlainActionFuture<Resp> future = PlainActionFuture.newFuture();
+            asyncMethodNoRequest.execute(requestOptions, future);
+            return future.actionGet();
+        }
+    }
+
     @FunctionalInterface
     protected interface SyncMethod<Request, Response> {
         Response execute(Request request, RequestOptions options) throws IOException;
     }
 
     @FunctionalInterface
+    protected interface SyncMethodNoRequest<Response> {
+        Response execute(RequestOptions options) throws IOException;
+    }
+
+    @FunctionalInterface
     protected interface AsyncMethod<Request, Response> {
         void execute(Request request, RequestOptions options, ActionListener<Response> listener);
+    }
+
+    @FunctionalInterface
+    protected interface AsyncMethodNoRequest<Response> {
+        void execute(RequestOptions options, ActionListener<Response> listener);
     }
 
     /**

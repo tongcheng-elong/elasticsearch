@@ -19,6 +19,8 @@
 
 package org.elasticsearch.index.mapper;
 
+import org.elasticsearch.Version;
+import org.elasticsearch.cluster.metadata.IndexMetaData;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesArray;
 import org.elasticsearch.common.bytes.BytesReference;
@@ -40,6 +42,11 @@ import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
 
 public class DocumentMapperMergeTests extends ESSingleNodeTestCase {
+    @Override
+    protected boolean forbidPrivateIndexSettings() {
+        // this is needed to force the index version in the _parent tests
+        return false;
+    }
 
     public void test1Merge() throws Exception {
 
@@ -51,7 +58,8 @@ public class DocumentMapperMergeTests extends ESSingleNodeTestCase {
         String stage2Mapping = Strings.toString(XContentFactory.jsonBuilder().startObject().startObject("person").startObject("properties")
                 .startObject("name").field("type", "text").endObject()
                 .startObject("age").field("type", "integer").endObject()
-                .startObject("obj1").startObject("properties").startObject("prop1").field("type", "integer").endObject().endObject().endObject()
+                .startObject("obj1").startObject("properties").startObject("prop1").field("type", "integer")
+                .endObject().endObject().endObject()
                 .endObject().endObject().endObject());
         DocumentMapper stage2 = parser.parse("person", new CompressedXContent(stage2Mapping));
 
@@ -70,7 +78,8 @@ public class DocumentMapperMergeTests extends ESSingleNodeTestCase {
         DocumentMapper mapper = parser.parse("type1", new CompressedXContent(objectMapping));
         assertNull(mapper.root().dynamic());
 
-        String withDynamicMapping = Strings.toString(XContentFactory.jsonBuilder().startObject().startObject("type1").field("dynamic", "false").endObject().endObject());
+        String withDynamicMapping = Strings.toString(XContentFactory.jsonBuilder().startObject().startObject("type1")
+            .field("dynamic", "false").endObject().endObject());
         DocumentMapper withDynamicMapper = parser.parse("type1", new CompressedXContent(withDynamicMapping));
         assertThat(withDynamicMapper.root().dynamic(), equalTo(ObjectMapper.Dynamic.FALSE));
 
@@ -153,7 +162,8 @@ public class DocumentMapperMergeTests extends ESSingleNodeTestCase {
 
     public void testConcurrentMergeTest() throws Throwable {
         final MapperService mapperService = createIndex("test").mapperService();
-        mapperService.merge("test", new CompressedXContent("{\"test\":{}}"), MapperService.MergeReason.MAPPING_UPDATE, false);
+        mapperService.merge("test", new CompressedXContent("{\"test\":{}}"),
+            MapperService.MergeReason.MAPPING_UPDATE, false);
         final DocumentMapper documentMapper = mapperService.documentMapper("test");
 
         DocumentFieldMappers dfm = documentMapper.mappers();
@@ -183,7 +193,8 @@ public class DocumentMapperMergeTests extends ESSingleNodeTestCase {
                         Mapping update = doc.dynamicMappingsUpdate();
                         assert update != null;
                         lastIntroducedFieldName.set(fieldName);
-                        mapperService.merge("test", new CompressedXContent(update.toString()), MapperService.MergeReason.MAPPING_UPDATE, false);
+                        mapperService.merge("test", new CompressedXContent(update.toString()),
+                            MapperService.MergeReason.MAPPING_UPDATE, false);
                     }
                 } catch (Exception e) {
                     error.set(e);
@@ -244,7 +255,9 @@ public class DocumentMapperMergeTests extends ESSingleNodeTestCase {
     }
 
     public void testMergeChildType() throws IOException {
-        DocumentMapperParser parser = createIndex("test").mapperService().documentMapperParser();
+        DocumentMapperParser parser =
+            createIndex("test", Settings.builder().put(IndexMetaData.SETTING_VERSION_CREATED, Version.V_6_4_0).build())
+                .mapperService().documentMapperParser();
 
         String initMapping = Strings.toString(XContentFactory.jsonBuilder().startObject().startObject("child")
             .startObject("_parent").field("type", "parent").endObject()
@@ -284,7 +297,9 @@ public class DocumentMapperMergeTests extends ESSingleNodeTestCase {
     }
 
     public void testMergeAddingParent() throws IOException {
-        DocumentMapperParser parser = createIndex("test").mapperService().documentMapperParser();
+        DocumentMapperParser parser =
+            createIndex("test", Settings.builder().put(IndexMetaData.SETTING_VERSION_CREATED, Version.V_6_4_0).build())
+                .mapperService().documentMapperParser();
 
         String initMapping = Strings.toString(XContentFactory.jsonBuilder().startObject().startObject("cowboy")
             .startObject("properties")

@@ -44,27 +44,36 @@ import java.util.Set;
 
 import static java.util.Collections.emptyList;
 import static org.elasticsearch.common.xcontent.XContentFactory.jsonBuilder;
+import static org.hamcrest.Matchers.containsString;
 
 public class ParentFieldMapperTests extends ESSingleNodeTestCase {
+    public void testParentIsDisabledInCurrentVersion() {
+        MapperParsingException exc = expectThrows(MapperParsingException.class,
+            () -> createIndex("test", Settings.EMPTY, "child", "_parent", "type=parent"));
+        assertThat(exc.getMessage(), containsString("[_parent] field is disabled"));
+    }
 
     public void testParentSetInDocNotAllowed() throws Exception {
         String mapping = Strings.toString(XContentFactory.jsonBuilder().startObject().startObject("type")
                 .endObject().endObject());
-        DocumentMapper docMapper = createIndex("test").mapperService().documentMapperParser().parse("type", new CompressedXContent(mapping));
+        DocumentMapper docMapper = createIndex("test")
+            .mapperService().documentMapperParser().parse("type", new CompressedXContent(mapping));
 
         try {
             docMapper.parse(SourceToParse.source("test", "type", "1", BytesReference.bytes(XContentFactory.jsonBuilder()
                 .startObject().field("_parent", "1122").endObject()), XContentType.JSON));
             fail("Expected failure to parse metadata field");
         } catch (MapperParsingException e) {
-            assertTrue(e.getMessage(), e.getMessage().contains("Field [_parent] is a metadata field and cannot be added inside a document"));
+            assertThat(e.getMessage(), e.getMessage(),
+                containsString("Field [_parent] is a metadata field and cannot be added inside a document"));
         }
     }
 
     public void testJoinFieldNotSet() throws Exception {
         String mapping = Strings.toString(XContentFactory.jsonBuilder().startObject().startObject("type")
                 .endObject().endObject());
-        DocumentMapper docMapper = createIndex("test").mapperService().documentMapperParser().parse("type", new CompressedXContent(mapping));
+        DocumentMapper docMapper = createIndex("test")
+            .mapperService().documentMapperParser().parse("type", new CompressedXContent(mapping));
         ParsedDocument doc = docMapper.parse(SourceToParse.source("test", "type", "1", BytesReference
                 .bytes(XContentFactory.jsonBuilder()
                         .startObject()
@@ -86,7 +95,8 @@ public class ParentFieldMapperTests extends ESSingleNodeTestCase {
             .startObject("properties")
             .endObject()
             .endObject().endObject();
-        mapperService.merge("some_type", new CompressedXContent(Strings.toString(mappingSource)), MergeReason.MAPPING_UPDATE, false);
+        mapperService.merge("some_type", new CompressedXContent(Strings.toString(mappingSource)),
+            MergeReason.MAPPING_UPDATE, false);
         Set<String> allFields = new HashSet<>(mapperService.simpleMatchToFullName("*"));
         assertTrue(allFields.contains("_parent"));
         assertFalse(allFields.contains("_parent#null"));
@@ -103,5 +113,4 @@ public class ParentFieldMapperTests extends ESSingleNodeTestCase {
         }
         return numFieldWithParentPrefix;
     }
-
 }

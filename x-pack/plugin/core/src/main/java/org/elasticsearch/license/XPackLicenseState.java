@@ -5,11 +5,11 @@
  */
 package org.elasticsearch.license;
 
+import org.apache.logging.log4j.LogManager;
 import org.elasticsearch.Version;
 import org.elasticsearch.common.Nullable;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.logging.LoggerMessageFormat;
-import org.elasticsearch.common.logging.Loggers;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.license.License.OperationMode;
 import org.elasticsearch.xpack.core.XPackField;
@@ -55,6 +55,9 @@ public class XPackLicenseState {
         messages.put(XPackField.LOGSTASH, new String[] {
             "Logstash will continue to poll centrally-managed pipelines"
         });
+        messages.put(XPackField.BEATS, new String[] {
+            "Beats will continue to poll centrally-managed configuration"
+        });
         messages.put(XPackField.DEPRECATION, new String[] {
             "Deprecation APIs are disabled"
         });
@@ -84,6 +87,7 @@ public class XPackLicenseState {
         messages.put(XPackField.GRAPH, XPackLicenseState::graphAcknowledgementMessages);
         messages.put(XPackField.MACHINE_LEARNING, XPackLicenseState::machineLearningAcknowledgementMessages);
         messages.put(XPackField.LOGSTASH, XPackLicenseState::logstashAcknowledgementMessages);
+        messages.put(XPackField.BEATS, XPackLicenseState::beatsAcknowledgementMessages);
         messages.put(XPackField.SQL, XPackLicenseState::sqlAcknowledgementMessages);
         ACKNOWLEDGMENT_MESSAGES = Collections.unmodifiableMap(messages);
     }
@@ -208,12 +212,19 @@ public class XPackLicenseState {
     private static String[] logstashAcknowledgementMessages(OperationMode currentMode, OperationMode newMode) {
         switch (newMode) {
             case BASIC:
-                switch (currentMode) {
-                    case TRIAL:
-                    case STANDARD:
-                    case GOLD:
-                    case PLATINUM:
-                        return new String[] { "Logstash will no longer poll for centrally-managed pipelines" };
+                if (isBasic(currentMode) == false) {
+                    return new String[] { "Logstash will no longer poll for centrally-managed pipelines" };
+                }
+                break;
+        }
+        return Strings.EMPTY_ARRAY;
+    }
+
+    private static String[] beatsAcknowledgementMessages(OperationMode currentMode, OperationMode newMode) {
+        switch (newMode) {
+            case BASIC:
+                if (isBasic(currentMode) == false) {
+                    return new String[] { "Beats will no longer be able to use centrally-managed configuration" };
                 }
                 break;
         }
@@ -228,11 +239,16 @@ public class XPackLicenseState {
                 switch (currentMode) {
                     case TRIAL:
                     case PLATINUM:
-                        return new String[] { "JDBC support will be disabled, but you can continue to use SQL CLI and REST endpoint" };
+                        return new String[] {
+                                "JDBC and ODBC support will be disabled, but you can continue to use SQL CLI and REST endpoint" };
                 }
                 break;
         }
         return Strings.EMPTY_ARRAY;
+    }
+
+    private static boolean isBasic(OperationMode mode) {
+        return mode == OperationMode.BASIC;
     }
 
     /** A wrapper for the license mode and state, to allow atomically swapping. */
@@ -293,7 +309,7 @@ public class XPackLicenseState {
                 // Before 6.3, Trial licenses would default having security enabled.
                 // If this license was generated before that version, then treat it as if security is explicitly enabled
                 if (mostRecentTrialVersion == null || mostRecentTrialVersion.before(Version.V_6_3_0)) {
-                    Loggers.getLogger(getClass()).info("Automatically enabling security for older trial license ({})",
+                    LogManager.getLogger(getClass()).info("Automatically enabling security for older trial license ({})",
                         mostRecentTrialVersion == null ? "[pre 6.1.0]" : mostRecentTrialVersion.toString());
                     isSecurityEnabledByTrialVersion = true;
                 }
@@ -555,20 +571,17 @@ public class XPackLicenseState {
      */
     public synchronized boolean isLogstashAllowed() {
         Status localStatus = status;
+        return localStatus.active && (isBasic(localStatus.mode) == false);
+    }
 
-        if (localStatus.active == false) {
-            return false;
-        }
+    /**
+     * Beats is allowed as long as there is an active license of type TRIAL, STANDARD, GOLD or PLATINUM
+     * @return {@code true} as long as there is a valid license
+     */
+    public boolean isBeatsAllowed() {
+        Status localStatus = status;
+        return localStatus.active && (isBasic(localStatus.mode) == false);
 
-        switch (localStatus.mode) {
-            case TRIAL:
-            case GOLD:
-            case PLATINUM:
-            case STANDARD:
-                return true;
-            default:
-                return false;
-        }
     }
 
     /**
@@ -593,6 +606,22 @@ public class XPackLicenseState {
     }
 
     /**
+     * Determine if Index Lifecycle API should be enabled.
+     * <p>
+     * Index Lifecycle API is available in for all license types except
+     * {@link OperationMode#MISSING}
+     *
+     * @return {@code true} as long as the license is valid. Otherwise
+     *         {@code false}.
+     */
+    public boolean isIndexLifecycleAllowed() {
+        // status is volatile
+        Status localStatus = status;
+        // Should work on all active licenses
+        return localStatus.active;
+    }
+
+    /**
      * Determine if SQL support should be enabled.
      * <p>
      *  SQL is available for all license types except {@link OperationMode#MISSING}
@@ -607,6 +636,20 @@ public class XPackLicenseState {
      *  JDBC is available only in for {@link OperationMode#PLATINUM} and {@link OperationMode#TRIAL} licences
      */
     public synchronized boolean isJdbcAllowed() {
+        Status localStatus = status;
+        OperationMode operationMode = localStatus.mode;
+
+        boolean licensed = operationMode == OperationMode.TRIAL || operationMode == OperationMode.PLATINUM;
+
+        return licensed && localStatus.active;
+    }
+
+    /**
+     * Determine if ODBC support should be enabled.
+     * <p>
+     * ODBC is available only in for {@link OperationMode#PLATINUM} and {@link OperationMode#TRIAL} licences
+     */
+    public synchronized boolean isOdbcAllowed() {
         Status localStatus = status;
         OperationMode operationMode = localStatus.mode;
 

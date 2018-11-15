@@ -27,9 +27,14 @@ import org.apache.lucene.codecs.CodecUtil;
 import org.apache.lucene.codecs.DocValuesFormat;
 import org.apache.lucene.codecs.PostingsFormat;
 import org.apache.lucene.document.LatLonDocValuesField;
+import org.apache.lucene.document.LongPoint;
 import org.apache.lucene.document.NumericDocValuesField;
+import org.apache.lucene.index.BinaryDocValues;
 import org.apache.lucene.index.CorruptIndexException;
 import org.apache.lucene.index.DirectoryReader;
+import org.apache.lucene.index.FieldInfo;
+import org.apache.lucene.index.FieldInfos;
+import org.apache.lucene.index.Fields;
 import org.apache.lucene.index.FilterCodecReader;
 import org.apache.lucene.index.FilterDirectoryReader;
 import org.apache.lucene.index.FilterLeafReader;
@@ -39,12 +44,20 @@ import org.apache.lucene.index.IndexFormatTooNewException;
 import org.apache.lucene.index.IndexFormatTooOldException;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.IndexWriterConfig;
+import org.apache.lucene.index.LeafMetaData;
 import org.apache.lucene.index.LeafReader;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.NoMergePolicy;
+import org.apache.lucene.index.NumericDocValues;
+import org.apache.lucene.index.PointValues;
 import org.apache.lucene.index.SegmentCommitInfo;
 import org.apache.lucene.index.SegmentInfos;
 import org.apache.lucene.index.SegmentReader;
+import org.apache.lucene.index.SortedDocValues;
+import org.apache.lucene.index.SortedNumericDocValues;
+import org.apache.lucene.index.SortedSetDocValues;
+import org.apache.lucene.index.StoredFieldVisitor;
+import org.apache.lucene.index.Terms;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Explanation;
 import org.apache.lucene.search.FieldDoc;
@@ -53,6 +66,7 @@ import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.Scorer;
 import org.apache.lucene.search.ScorerSupplier;
+import org.apache.lucene.search.Sort;
 import org.apache.lucene.search.SortField;
 import org.apache.lucene.search.SortedNumericSortField;
 import org.apache.lucene.search.SortedSetSortField;
@@ -78,6 +92,7 @@ import org.elasticsearch.common.util.iterable.Iterables;
 import org.elasticsearch.index.analysis.AnalyzerScope;
 import org.elasticsearch.index.analysis.NamedAnalyzer;
 import org.elasticsearch.index.fielddata.IndexFieldData;
+import org.elasticsearch.index.mapper.SeqNoFieldMapper;
 
 import java.io.IOException;
 import java.text.ParseException;
@@ -86,6 +101,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.function.LongConsumer;
 
 public class Lucene {
     public static final String LATEST_DOC_VALUES_FORMAT = "Lucene70";
@@ -200,7 +216,7 @@ public class Lucene {
                 throw new IllegalStateException("no commit found in the directory");
             }
         }
-        final CommitPoint cp = new CommitPoint(si, directory);
+        final IndexCommit cp = getIndexCommit(si, directory);
         try (IndexWriter writer = new IndexWriter(directory, new IndexWriterConfig(Lucene.STANDARD_ANALYZER)
                 .setSoftDeletesField(Lucene.SOFT_DELETES_FIELD)
                 .setIndexCommit(cp)
@@ -210,6 +226,13 @@ public class Lucene {
             // do nothing and close this will kick of IndexFileDeleter which will remove all pending files
         }
         return si;
+    }
+
+    /**
+     * Returns an index commit for the given {@link SegmentInfos} in the given directory.
+     */
+    public static IndexCommit getIndexCommit(SegmentInfos si, Directory directory) throws IOException {
+        return new CommitPoint(si, directory);
     }
 
     /**
@@ -569,7 +592,8 @@ public class Lucene {
             out.writeString(sortField.getField());
         }
         if (sortField.getComparatorSource() != null) {
-            IndexFieldData.XFieldComparatorSource comparatorSource = (IndexFieldData.XFieldComparatorSource) sortField.getComparatorSource();
+            IndexFieldData.XFieldComparatorSource comparatorSource =
+                    (IndexFieldData.XFieldComparatorSource) sortField.getComparatorSource();
             writeSortType(out, comparatorSource.reducedType());
             writeMissingValue(out, comparatorSource.missingValue(sortField.getReverse()));
         } else {
@@ -916,5 +940,122 @@ public class Lucene {
      */
     public static NumericDocValuesField newSoftDeletesField() {
         return new NumericDocValuesField(SOFT_DELETES_FIELD, 1);
+    }
+
+    /**
+     * Returns an empty leaf reader with the given max docs. The reader will be fully deleted.
+     */
+    public static LeafReader emptyReader(final int maxDoc) {
+        return new LeafReader() {
+            final Bits liveDocs = new Bits.MatchNoBits(maxDoc);
+
+            public Terms terms(String field) {
+                return null;
+            }
+
+            public NumericDocValues getNumericDocValues(String field) {
+                return null;
+            }
+
+            public BinaryDocValues getBinaryDocValues(String field) {
+                return null;
+            }
+
+            public SortedDocValues getSortedDocValues(String field) {
+                return null;
+            }
+
+            public SortedNumericDocValues getSortedNumericDocValues(String field) {
+                return null;
+            }
+
+            public SortedSetDocValues getSortedSetDocValues(String field) {
+                return null;
+            }
+
+            public NumericDocValues getNormValues(String field) {
+                return null;
+            }
+
+            public FieldInfos getFieldInfos() {
+                return new FieldInfos(new FieldInfo[0]);
+            }
+
+            public Bits getLiveDocs() {
+                return this.liveDocs;
+            }
+
+            public PointValues getPointValues(String fieldName) {
+                return null;
+            }
+
+            public void checkIntegrity() {
+            }
+
+            public Fields getTermVectors(int docID) {
+                return null;
+            }
+
+            public int numDocs() {
+                return 0;
+            }
+
+            public int maxDoc() {
+                return maxDoc;
+            }
+
+            public void document(int docID, StoredFieldVisitor visitor) {
+            }
+
+            protected void doClose() {
+            }
+
+            public LeafMetaData getMetaData() {
+                return new LeafMetaData(Version.LATEST.major, Version.LATEST, (Sort)null);
+            }
+
+            public CacheHelper getCoreCacheHelper() {
+                return null;
+            }
+
+            public CacheHelper getReaderCacheHelper() {
+                return null;
+            }
+        };
+    }
+
+    /**
+     * Scans sequence numbers (i.e., {@link SeqNoFieldMapper#NAME}) between {@code fromSeqNo}(inclusive) and {@code toSeqNo}(inclusive)
+     * in the provided directory reader. This method invokes the callback {@code onNewSeqNo} whenever a sequence number value is found.
+     *
+     * @param directoryReader the directory reader to scan
+     * @param fromSeqNo       the lower bound of a range of seq_no to scan (inclusive)
+     * @param toSeqNo         the upper bound of a range of seq_no to scan (inclusive)
+     * @param onNewSeqNo      the callback to be called whenever a new valid sequence number is found
+     */
+    public static void scanSeqNosInReader(DirectoryReader directoryReader, long fromSeqNo, long toSeqNo,
+                                          LongConsumer onNewSeqNo) throws IOException {
+        final DirectoryReader reader = Lucene.wrapAllDocsLive(directoryReader);
+        final IndexSearcher searcher = new IndexSearcher(reader);
+        searcher.setQueryCache(null);
+        final Query query = LongPoint.newRangeQuery(SeqNoFieldMapper.NAME, fromSeqNo, toSeqNo);
+        final Weight weight = searcher.createWeight(query, false, 1.0f);
+        for (LeafReaderContext leaf : reader.leaves()) {
+            final Scorer scorer = weight.scorer(leaf);
+            if (scorer == null) {
+                continue;
+            }
+            final DocIdSetIterator docIdSetIterator = scorer.iterator();
+            final NumericDocValues seqNoDocValues = leaf.reader().getNumericDocValues(SeqNoFieldMapper.NAME);
+            int docId;
+            while ((docId = docIdSetIterator.nextDoc()) != DocIdSetIterator.NO_MORE_DOCS) {
+                if (seqNoDocValues == null || seqNoDocValues.advanceExact(docId) == false) {
+                    throw new IllegalStateException("seq_no doc_values not found for doc_id=" + docId);
+                }
+                final long seqNo = seqNoDocValues.longValue();
+                assert fromSeqNo <= seqNo && seqNo <= toSeqNo : "from_seq_no=" + fromSeqNo + " seq_no=" + seqNo + " to_seq_no=" + toSeqNo;
+                onNewSeqNo.accept(seqNo);
+            }
+        }
     }
 }
